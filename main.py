@@ -62,6 +62,7 @@ RÈGLES LATEX ABSOLUES (à respecter impérativement)
 \usepackage{enumitem}
 \usepackage{tikz}
 \usepackage{graphicx}
+\usepackage{xcolor}
 \usepackage[most]{tcolorbox}
 \usetikzlibrary{shapes.geometric, arrows.meta, fit, calc, positioning}
 \setlength{\parindent}{0pt}
