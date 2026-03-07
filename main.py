@@ -6,16 +6,16 @@
 =============================================================
 """
 
-import os, ftplib, io, subprocess, tempfile, datetime, json, re, asyncio
+import os, ftplib, io, datetime, re, asyncio
 from collections import defaultdict
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
 app = FastAPI(title="Générateur de Sujets – Technologie")
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,228 +27,501 @@ app.add_middleware(
 NOTION_API_KEY     = os.environ.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
-FTP_HOST           = os.environ.get("FTP_HOST", "")
-FTP_USER           = os.environ.get("FTP_USER", "")
-FTP_PASS           = os.environ.get("FTP_PASS", "")
-FTP_REMOTE_PATH    = os.environ.get("FTP_REMOTE_PATH", "/sujets_generes/")
-FTP_PUBLIC_URL     = os.environ.get("FTP_PUBLIC_URL", "")
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 usage: dict = defaultdict(lambda: defaultdict(int))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  CSS DE BASE injecté dans chaque sujet généré
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_CSS = """
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    color: #1a1a1a;
+    background: #f0f2f5;
+    padding: 20px;
+  }
+
+  .sujet-wrapper {
+    max-width: 860px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.10);
+    overflow: hidden;
+  }
+
+  .print-bar {
+    background: #1a73e8;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .print-bar span { color: white; font-size: 14px; font-weight: 500; }
+  .btn-print {
+    background: white;
+    color: #1a73e8;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 22px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s;
+  }
+  .btn-print:hover { background: #e8f0fe; }
+
+  .sujet { padding: 32px 40px; }
+
+  .entete-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 18px;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 10px;
+  }
+  .entete-titre { text-align: center; margin-bottom: 20px; }
+  .entete-titre h1 { font-size: 24px; font-weight: 800; color: #0d1b2a; margin-bottom: 4px; }
+  .entete-titre .sous-titre { font-size: 15px; color: #444; margin-bottom: 4px; }
+  .entete-titre .duree { font-size: 14px; color: #666; }
+
+  .champs-eleve {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin: 18px 0 28px 0;
+  }
+  .champ { border-bottom: 1.5px solid #333; padding-bottom: 4px; font-size: 14px; color: #333; }
+
+  .contexte {
+    background: #f8f9fa;
+    border-left: 4px solid #1a73e8;
+    padding: 14px 18px;
+    margin-bottom: 28px;
+    border-radius: 0 6px 6px 0;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .document { margin-bottom: 36px; }
+  .document-titre {
+    background: #0d1b2a;
+    color: white;
+    padding: 8px 16px;
+    font-size: 15px;
+    font-weight: 700;
+    border-radius: 4px;
+    margin-bottom: 14px;
+  }
+  .document-texte { font-size: 14px; line-height: 1.75; margin-bottom: 16px; color: #222; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th { background: #0d1b2a; color: white; padding: 10px 12px; text-align: left; font-weight: 600; }
+  td { padding: 9px 12px; border: 1px solid #ddd; }
+  tr:nth-child(even) td { background: #f5f7fa; }
+  .note-tableau { font-size: 13px; color: #555; margin-top: 10px; font-style: italic; }
+
+  .formule {
+    background: #f0f4ff;
+    border: 1px solid #c5d3f0;
+    border-radius: 6px;
+    padding: 14px 18px;
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    text-align: center;
+    margin: 14px 0;
+    font-weight: 700;
+    color: #1a3a6b;
+  }
+  .donnees-liste { list-style: none; padding: 0; margin: 10px 0; }
+  .donnees-liste li { padding: 5px 0; font-size: 14px; border-bottom: 1px dotted #ddd; }
+  .donnees-liste li:last-child { border-bottom: none; }
+
+  .chaine {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+    justify-content: center;
+    margin: 18px 0;
+  }
+  .chaine-bloc {
+    background: #1a73e8;
+    color: white;
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 110px;
+    max-width: 150px;
+    line-height: 1.3;
+  }
+  .chaine-bloc.energie { background: #e8762b; }
+  .chaine-bloc.vide {
+    background: white;
+    border: 2px dashed #aaa;
+    color: #999;
+    font-style: italic;
+  }
+  .chaine-fleche { font-size: 22px; color: #555; padding: 0 6px; flex-shrink: 0; }
+  .chaine-section { margin: 12px 0; }
+  .chaine-section-titre {
+    font-size: 12px;
+    font-weight: 700;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .algo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin: 18px auto;
+    max-width: 520px;
+  }
+  .algo-fleche { font-size: 20px; color: #555; line-height: 1; margin: 3px 0; }
+  .algo-debut, .algo-fin {
+    background: #0d1b2a;
+    color: white;
+    padding: 10px 30px;
+    border-radius: 50px;
+    font-weight: 700;
+    font-size: 14px;
+    text-align: center;
+  }
+  .algo-action {
+    background: #e8f0fe;
+    border: 2px solid #1a73e8;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    text-align: center;
+    width: 100%;
+    max-width: 380px;
+  }
+  .algo-condition {
+    background: #fff8e1;
+    border: 2px solid #f9a825;
+    padding: 10px 20px;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    width: 240px;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 4px 0;
+  }
+  .algo-branche {
+    display: flex;
+    width: 100%;
+    gap: 20px;
+    justify-content: center;
+    margin: 4px 0;
+  }
+  .algo-branche-oui, .algo-branche-non {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    max-width: 220px;
+  }
+  .algo-branche-label { font-size: 12px; font-weight: 700; color: #888; }
+
+  .separateur-partie { border: none; border-top: 3px solid #0d1b2a; margin: 36px 0 24px 0; }
+  .titre-partie {
+    text-align: center;
+    font-size: 20px;
+    font-weight: 800;
+    color: #0d1b2a;
+    margin-bottom: 24px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .question { margin-bottom: 28px; }
+  .question-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .question-titre { font-size: 15px; font-weight: 700; color: #0d1b2a; }
+  .question-points { font-size: 13px; color: #555; font-style: italic; white-space: nowrap; }
+  .question-enonce { font-size: 14px; color: #333; margin-bottom: 10px; line-height: 1.7; }
+  .zone-reponse {
+    border: 1.5px solid #bbb;
+    border-radius: 6px;
+    width: 100%;
+    min-height: 80px;
+    padding: 10px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+    background: #fafafa;
+    color: #222;
+  }
+  .zone-reponse:focus { outline: 2px solid #1a73e8; background: white; }
+  .lignes-calcul { margin-top: 8px; }
+  .ligne-calcul { border-bottom: 1px solid #ccc; margin-bottom: 22px; height: 1px; }
+
+  .corrige {
+    background: #fff8e1;
+    border: 1.5px solid #f9a825;
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-top: 10px;
+  }
+  .corrige-item { margin-bottom: 14px; font-size: 14px; line-height: 1.7; }
+  .corrige-item strong { color: #0d1b2a; }
+
+  @media (max-width: 600px) {
+    body { padding: 0; background: white; }
+    .sujet-wrapper { border-radius: 0; box-shadow: none; }
+    .sujet { padding: 18px 16px; }
+    .champs-eleve { grid-template-columns: 1fr; }
+    .chaine { flex-direction: column; }
+    .chaine-fleche { transform: rotate(90deg); }
+    .print-bar { flex-direction: column; align-items: flex-start; }
+    .entete-titre h1 { font-size: 18px; }
+    .algo-condition { width: 180px; height: 75px; font-size: 12px; }
+    .chaine-bloc { min-width: 90px; font-size: 12px; }
+    table { font-size: 12px; }
+    th, td { padding: 7px 8px; }
+  }
+
+  @media print {
+    body { background: white; padding: 0; font-size: 11pt; }
+    .sujet-wrapper { box-shadow: none; border-radius: 0; max-width: 100%; }
+    .print-bar { display: none !important; }
+    .sujet { padding: 0; }
+    .page-break { page-break-before: always; }
+    .no-break { page-break-inside: avoid; }
+    @page { size: A4; margin: 1.8cm; }
+    .chaine-bloc, .algo-debut, .algo-fin, th, .document-titre {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .zone-reponse { border: 1px solid #888; background: white !important; min-height: 80px; }
+    .corrige { border: 1px solid #ccc; background: #fffdf0 !important; }
+  }
+</style>
+
+<script>
+function imprimerSujet() { window.print(); }
+</script>
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  PROMPT SYSTÈME
 # ─────────────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = r"""
+SYSTEM_PROMPT = """
 Tu es un expert en pédagogie technologique au collège en France (niveau 3ème).
-Tu génères des sujets COMPLETS de brevet blanc de TECHNOLOGIE entièrement codés en LaTeX,
-directement compilables avec pdflatex SANS ERREUR.
+Tu génères des sujets COMPLETS de brevet blanc de TECHNOLOGIE entièrement en HTML.
 
-═══════════════════════════════════════════════
-RÈGLES LATEX ABSOLUES
-═══════════════════════════════════════════════
+════════════════════════════════════════════════
+RÈGLES ABSOLUES
+════════════════════════════════════════════════
 
-1. PRÉAMBULE OBLIGATOIRE (copier exactement) :
-\documentclass[11pt,a4paper]{article}
-\usepackage[T1]{fontenc}
-\usepackage[utf8]{inputenc}
-\usepackage[french]{babel}
-\usepackage[margin=1.8cm]{geometry}
-\usepackage{amsmath}
-\usepackage{array}
-\usepackage{tabularx}
-\usepackage{enumitem}
-\usepackage{tikz}
-\usepackage{graphicx}
-\usepackage[framemethod=default]{mdframed}
-\usetikzlibrary{shapes.geometric, arrows.meta, fit, calc, positioning}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.6em}
-\usepackage{needspace}
+1. RÉPONDS UNIQUEMENT avec le contenu HTML intérieur.
+   - Commence directement par <div class="print-bar">
+   - Termine par la dernière </div> du corrigé
+   - ZÉRO texte avant ou après
+   - PAS de <!DOCTYPE>, <html>, <head>, <body>, <style> ni <script>
 
-2. BOÎTES DE RÉPONSE : utiliser UNIQUEMENT ce format (jamais tcolorbox) :
-\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=VALEUR]
-\end{mdframed}
+2. UTILISE UNIQUEMENT ces classes CSS déjà définies :
+   print-bar, btn-print, sujet, entete-meta, entete-titre, sous-titre, duree,
+   champs-eleve, champ, contexte, document, document-titre, document-texte,
+   table/th/td, formule, donnees-liste, chaine, chaine-section, chaine-section-titre,
+   chaine-bloc, chaine-bloc energie, chaine-bloc vide, chaine-fleche,
+   algo, algo-debut, algo-fin, algo-action, algo-condition,
+   algo-branche, algo-branche-oui, algo-branche-non, algo-branche-label, algo-fleche,
+   separateur-partie, titre-partie, question, question-header, question-titre,
+   question-points, question-enonce, zone-reponse, lignes-calcul, ligne-calcul,
+   corrige, corrige-item, note-tableau, page-break, no-break
 
-Valeurs innerbottommargin selon la question :
-- Question courte (2-3 pts) : innerbottommargin=35pt
-- Question développée (4-5 pts) : innerbottommargin=55pt
-- Question calcul : innerbottommargin=70pt, avec 4 lignes de calcul à l'intérieur :
-  \rule{\linewidth}{0.3pt}\\[0.6cm]
-  \rule{\linewidth}{0.3pt}\\[0.6cm]
-  \rule{\linewidth}{0.3pt}\\[0.6cm]
-  \rule{\linewidth}{0.3pt}\\[0.6cm]
-- Question schéma à compléter : insérer le TikZ à compléter à l'intérieur
+3. CHAÎNES FONCTIONNELLES avec .chaine et .chaine-bloc :
+   - class="chaine-bloc" = chaîne d'information (bleu)
+   - class="chaine-bloc energie" = chaîne d'énergie (orange)
+   - class="chaine-bloc vide" = blocs à compléter (blanc pointillé)
+   - class="chaine-fleche" contient le caractère →
 
-3. RÈGLES TikZ STRICTES :
-- Toujours [node distance=1.5cm] minimum
-- Largeur nœud : minimum width=2.8cm, maximum width=3.5cm
-- Texte nœuds : align=center, font=\footnotesize\sffamily
-- Maximum 5-6 nœuds par schéma
-- Toujours dans \begin{center}...\end{center}
-- JAMAIS de texte accentué dans TikZ : utiliser \'{e}, \`{a}, \^{o} etc.
-- Nœuds vides pour schémas à compléter : \node[style] (X) at (0,0) {};
+4. ALGORIGRAMME avec .algo — minimum 7 étapes :
+   Début → initialisation → lecture capteur → condition (losange) → branches OUI/NON → action finale → Fin
+   Les branches utilisent .algo-branche contenant .algo-branche-oui et .algo-branche-non
 
-4. TABLEAUX : toujours tabularx avec \linewidth.
+5. ZONES DE RÉPONSE :
+   - Réponse ouverte : <textarea class="zone-reponse" rows="5"></textarea>
+   - Calcul : <div class="lignes-calcul"> + 4x <div class="ligne-calcul"></div> </div>
 
-5. INTERDICTIONS ABSOLUES :
-- Ne jamais utiliser \tcolorbox ni aucun package de couleur (xcolor, color)
-- Ne jamais mettre \newpage à l'intérieur d'un environnement mdframed
-- Ne jamais utiliser _ hors mode mathématique (utiliser \_ ou éviter)
+6. PAGE-BREAK entre chaque partie : <div class="page-break"></div>
 
-═══════════════════════════════════════════════
-STRUCTURE OBLIGATOIRE À SUIVRE DANS TOUS LES CAS
-═══════════════════════════════════════════════
+════════════════════════════════════════════════
+STRUCTURE OBLIGATOIRE
+════════════════════════════════════════════════
 
-──── EN-TÊTE (toujours identique) ────
+<div class="print-bar">
+  <span>Collège Jacques Prévert – M. de PAZ – Brevet Blanc Technologie</span>
+  <button class="btn-print" onclick="imprimerSujet()">🖨️ Imprimer / Enregistrer PDF</button>
+</div>
 
-\begin{center}
-{\small Technologie -- 3\textsuperscript{\`eme} \hfill Coll\`ege -- Sujet g\'en\'er\'e par IA}
-\end{center}
-\begin{center}
-{\LARGE\bfseries [TITRE DU SUJET]}\\[0.3cm]
-{\large Brevet Blanc -- \'Epreuve de Technologie}\\[0.2cm]
-{\normalsize Dur\'ee : 30 minutes \quad|\quad 25 points}
-\end{center}
-\begin{tabularx}{\linewidth}{XXX}
-\textbf{Nom :} \hrulefill & \textbf{Pr\'enom :} \hrulefill & \textbf{Classe :} \hrulefill
-\end{tabularx}
-\vspace{0.5cm}
+<div class="sujet">
 
-──── PARTIE 1 : DOCUMENTS ────
+  <div class="entete-meta">
+    <span>Technologie – 3ème</span>
+    <span>Collège Jacques Prévert – Sujet généré par IA</span>
+  </div>
+  <div class="entete-titre">
+    <h1>[TITRE EN MAJUSCULES]</h1>
+    <div class="sous-titre">Brevet Blanc – Épreuve de Technologie</div>
+    <div class="duree">Durée : 30 minutes &nbsp;|&nbsp; 25 points</div>
+  </div>
+  <div class="champs-eleve">
+    <div class="champ">Nom : ___________________________</div>
+    <div class="champ">Prénom : ________________________</div>
+    <div class="champ">Classe : ________________________</div>
+  </div>
 
-[Contexte introductif 5-8 lignes, très détaillé : décrire le système, son utilité, ses composants principaux, son contexte d'usage réel]
+  <div class="contexte">[CONTEXTE 6-8 lignes très détaillées : système, utilité, composants réels nommés, contexte d'usage]</div>
 
-\subsection*{Document 1 -- [Titre très descriptif]}
-Texte de présentation DÉTAILLÉ (5-8 lignes) décrivant précisément le fonctionnement du système.
-Puis schéma TikZ COMPLET de la chaîne fonctionnelle avec TOUS les blocs :
-- Chaîne d'information : Acquérir → Traiter → Communiquer
-- Saute une ligne en suite
-- Chaîne d'énergie : autant de blocs que nécessaire
-- Chaque nœud doit contenir le nom du composant réel (ex: "Capteur DHT22" pas juste "Capteur")
-Si le schéma est grand, ajouter \newpage avant le document suivant.
+  <div class="document no-break">
+    <div class="document-titre">Document 1 – Chaîne fonctionnelle : [titre]</div>
+    <div class="document-texte">[5-6 lignes de description précise avec composants réels nommés (ex: Arduino Uno, capteur DHT22, moteur DC L298N...)]</div>
+    <div class="chaine-section">
+      <div class="chaine-section-titre">Chaîne d'information</div>
+      <div class="chaine">
+        [4-5 blocs .chaine-bloc avec noms réels, séparés par .chaine-fleche →]
+      </div>
+    </div>
+    <div class="chaine-section">
+      <div class="chaine-section-titre">Chaîne d'énergie</div>
+      <div class="chaine">
+        [3-4 blocs .chaine-bloc.energie avec noms réels, séparés par .chaine-fleche →]
+      </div>
+    </div>
+  </div>
 
-\newpage
+  <div class="page-break"></div>
 
-\subsection*{Document 2 -- [Titre très descriptif]}
-Tableau comparatif DÉTAILLÉ tabularx (4-5 colonnes, 4-5 lignes).
-Chaque cellule doit contenir des données réelles et précises (valeurs chiffrées, unités, caractéristiques techniques).
-Ajouter 3-4 lignes de texte explicatif APRÈS le tableau pour contextualiser les données.
+  <div class="document no-break">
+    <div class="document-titre">Document 2 – [Titre tableau comparatif]</div>
+    <div class="document-texte">[3-4 lignes contexte]</div>
+    <table>
+      <tr><th>[Col1]</th><th>[Col2]</th><th>[Col3]</th><th>[Col4]</th><th>[Col5]</th></tr>
+      [4-5 lignes avec vraies valeurs numériques et unités]
+    </table>
+    <div class="note-tableau">[Note explicative 2-3 lignes]</div>
+  </div>
 
-\newpage
+  <div class="document no-break">
+    <div class="document-titre">Document 3 – [Titre calcul]</div>
+    <div class="document-texte">[Contexte 3-4 lignes]</div>
+    <div class="formule">[FORMULE] avec [variables expliquées]</div>
+    <ul class="donnees-liste">
+      <li><strong>[Var]</strong> = [valeur] [unité] – [explication]</li>
+      [3-4 variables]
+    </ul>
+    <div class="document-texte">[Question de calcul posée clairement]</div>
+  </div>
 
-\subsection*{Document 3 -- [Titre très descriptif]}
-Données numériques COMPLÈTES pour un calcul :
-- Présenter le contexte en 3-4 lignes
-- Donner la formule avec explication de chaque variable
-- Donner toutes les valeurs numériques avec unités
-- Poser la question de calcul clairement
+  <div class="page-break"></div>
 
-\newpage
+  <div class="document no-break">
+    <div class="document-titre">Document 4 – Algorigramme : [titre]</div>
+    <div class="document-texte">[3-4 lignes d'introduction]</div>
+    <div class="algo">
+      <div class="algo-debut">DÉBUT</div>
+      <div class="algo-fleche">↓</div>
+      <div class="algo-action">[Initialisation système]</div>
+      <div class="algo-fleche">↓</div>
+      <div class="algo-action">[Lecture capteur nommé réellement]</div>
+      <div class="algo-fleche">↓</div>
+      <div class="algo-condition">[Condition avec seuil chiffré]</div>
+      <div class="algo-branche">
+        <div class="algo-branche-oui">
+          <div class="algo-branche-label">OUI</div>
+          <div class="algo-action">[Action si vrai]</div>
+          <div class="algo-fleche">↓</div>
+          <div class="algo-action">[Action complémentaire]</div>
+        </div>
+        <div class="algo-branche-non">
+          <div class="algo-branche-label">NON</div>
+          <div class="algo-action">[Action si faux]</div>
+          <div class="algo-fleche">↓</div>
+          <div class="algo-action">[État veille]</div>
+        </div>
+      </div>
+      <div class="algo-fleche">↓</div>
+      <div class="algo-action">[Envoi données / affichage]</div>
+      <div class="algo-fleche">↓</div>
+      <div class="algo-fin">FIN</div>
+    </div>
+  </div>
 
-\subsection*{Document 4 -- [Titre très descriptif de l'algorigramme]}
-Texte d'introduction de l'algorigramme (3-4 lignes).
-Algorigramme TikZ COMPLET et DÉTAILLÉ :
-- Minimum 8 étapes (Début, 2-3 conditions SI/SINON, 3-4 actions, Fin)
-- Chaque nœud avec texte explicite et composant réel nommé
-- Utiliser des formes distinctes : rectangle pour actions, losange pour conditions, ovale pour Début/Fin
-- Flèches étiquetées OUI/NON sur les conditions
+  <div class="page-break"></div>
 
-\newpage
+  <hr class="separateur-partie">
+  <div class="titre-partie">Questions</div>
 
-──── PARTIE 2 : QUESTIONS ────
+  [5 questions avec .question > .question-header + .question-enonce + zone-reponse ou lignes-calcul]
+  [Total = exactement 25 points]
 
-\begin{center}
-\rule{\linewidth}{2pt}\\[0.3cm]
-{\Large\bfseries QUESTIONS}\\[0.1cm]
-\rule{\linewidth}{2pt}
-\end{center}
-\vspace{0.3cm}
+  <div class="page-break"></div>
 
-Format obligatoire pour chaque question :
-\noindent\textbf{Question X -- [titre court]} \hfill \textit{(Y points)}\\[0.1cm]
-[énoncé de la question]
-\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=VALEUR]
-\end{mdframed}
-\vspace{0.4cm}
+  <hr class="separateur-partie">
+  <div class="titre-partie">Corrigé et Barème – Réservé à l'enseignant</div>
+  <div class="corrige">
+    [5 .corrige-item avec réponse complète + barème détaillé]
+  </div>
 
-\newpage
+</div>
 
-──── PARTIE 3 : CORRIGÉ ────
+════════════════════════════════════════════════
+TYPES D'EXERCICES (choisir 5 parmi)
+════════════════════════════════════════════════
 
-\begin{center}
-\rule{\linewidth}{2pt}\\[0.3cm]
-{\Large\bfseries CORRIG\'E ET BAR\`EME -- R\'ESERV\'E \`A L'ENSEIGNANT}\\[0.1cm]
-\rule{\linewidth}{2pt}
-\end{center}
+TYPE A – ANALYSE FONCTIONNELLE : compléter la chaîne avec liste de termes fournie
+TYPE B – MATÉRIAUX : choisir depuis le tableau + justifier 3 critères → rows="7"
+TYPE C – CALCUL NUMÉRIQUE : formule Document 3, lignes-calcul + réponse finale
+TYPE D – ALGORIGRAMME : compléter les trous OU décrire en français → rows="6"
+TYPE E – PSEUDO-CODE : compléter code incomplet dans un <pre> → rows="5"
+TYPE F – DÉVELOPPEMENT DURABLE : cycle de vie / impact → rows="5"
+TYPE G – LECTURE DE SCHÉMA : identifier composants et fonctions → rows="5"
+TYPE H – AVANTAGES/INCONVÉNIENTS : 2 avantages + 1 limite justifiés → rows="6"
 
-Pour chaque question : réponse attendue + critères de notation.
-Saute une ligne pour chaque questions.
-
-═══════════════════════════════════════════════
-TYPES D'EXERCICES (choisir 5 parmi ces types)
-═══════════════════════════════════════════════
-
-TYPE A – ANALYSE FONCTIONNELLE
-Compléter un diagramme des blocs (chaîne d'information + chaîne d'énergie).
-Schéma TikZ avec nœuds vides, liste de termes à replacer.
-Termes : Acquérir, Traiter, Communiquer, Alimenter, Distribuer, Convertir.
-
-TYPE B – MATÉRIAUX ET PROPRIÉTÉS
-Choisir un matériau depuis un tableau + justifier avec 3 critères.
-Tableau tabularx + espace de réponse structuré.
-
-TYPE C – CALCUL NUMÉRIQUE
-Appliquer une formule (E=P*t, P=U*I, Q=I*t, etc.)
-Espace calcul avec lignes + unités attendues.
-
-TYPE D – ALGORIGRAMME
-Compléter un algorigramme à trous OU décrire en français ce qu'il fait.
-Algorigramme TikZ + zone réponse.
-
-TYPE E – PROGRAMMATION / ALGORITHME TEXTUEL
-Compléter un pseudo-code avec des pointillés.
-Thèmes : capteur, condition, boucle, variable, actionneur.
-
-TYPE F – DÉVELOPPEMENT DURABLE / CYCLE DE VIE
-Identifier la phase du cycle de vie concernée.
-Relier matériau et impact environnemental.
-
-TYPE G – LECTURE DE SCHÉMA
-Identifier des composants sur un schéma TikZ annoté partiellement.
-Relier composant et fonction.
-
-TYPE H – AVANTAGES / INCONVÉNIENTS
-Citer 2 avantages et 1 limite du système. Justifier.
-
-═══════════════════════════════════════════════
+════════════════════════════════════════════════
 CONTRAINTES FINALES
-═══════════════════════════════════════════════
-- Total barème = exactement 25 points
-- Niveau : 3ème (collège)
-- Langue : français intégral
-- PAS d'images externes, TOUT en TikZ ou tabularx
-- Varier les thèmes ET les types d'exercices à chaque génération
-- Chaque document doit occuper AU MINIMUM une demi-page
-- Les schémas TikZ doivent être grands et lisibles (scale=1.2 minimum)
-- Les algorigrammes doivent avoir minimum 8 étapes
-- Les tableaux doivent avoir minimum 4 colonnes et 4 lignes avec données réelles
-- Utiliser \vspace{0.5cm} généreusement entre les éléments
-- Utiliser \newpage entre chaque document pour garantir la lisibilité
-- Nommer les composants avec leurs références réelles (Arduino, DHT22, L293D, etc.)
+════════════════════════════════════════════════
+- 25 points EXACTEMENT répartis sur 5 questions
+- Niveau 3ème, français intégral
+- Composants nommés avec références réelles (Arduino Uno, DHT22, HC-SR04, L298N, servo SG90...)
+- Tableau : minimum 5 colonnes, 4 lignes, valeurs numériques réelles avec unités
+- Algorigramme : minimum 7 étapes avec 2 branches OUI/NON
+- Contexte très détaillé : 6-8 lignes
 
 THÈMES (varier à chaque appel) :
 Robot aspirateur, Fontaine connectée, Vélo électrique, Serrure connectée,
 Lampadaire solaire intelligent, Serre automatisée, Trottinette électrique,
 Purificateur d'air, Bras robotisé pédagogique, Porte automatique,
 Système d'irrigation, Voiture autonome miniature, Pont-levis connecté,
-Distributeur automatique de gel, Capteur de température connecté.
-Tu peux choisir d'autres thèmes non listés.
-
-RÉPONDS UNIQUEMENT avec le code LaTeX complet.
-Commence par \documentclass et termine par \end{document}.
-Zéro texte avant ni après.
+Distributeur automatique de gel, Station météo connectée,
+Ascenseur intelligent, Barrière de parking automatique, Drone de livraison.
 """
 
 
@@ -257,10 +530,10 @@ Zéro texte avant ni après.
 # ─────────────────────────────────────────────────────────────────────────────
 async def call_groq(theme_hint: str = "") -> str:
     user_message = (
-        "Génère un sujet de brevet blanc de technologie complet en LaTeX."
-        + (f" Thème : {theme_hint}." if theme_hint else " Choisis un thème varié.")
-        + " Le code doit être directement compilable avec pdflatex sans erreur."
-        + " N'utilise jamais tcolorbox ni xcolor. Utilise uniquement mdframed pour les boîtes."
+        "Génère un sujet de brevet blanc de technologie complet en HTML."
+        + (f" Thème imposé : {theme_hint}." if theme_hint else " Choisis un thème varié.")
+        + " Respecte exactement les classes CSS fournies."
+        + " Ne génère QUE le contenu HTML intérieur, sans DOCTYPE ni html ni head ni body ni style ni script."
     )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -285,167 +558,48 @@ async def call_groq(theme_hint: str = "") -> str:
         raise HTTPException(502, f"Erreur Groq ({resp.status_code}): {resp.text[:500]}")
 
     raw = resp.json()["choices"][0]["message"]["content"]
-    raw = re.sub(r"^```(?:latex)?\s*\n?", "", raw.strip())
+    raw = re.sub(r"^```(?:html)?\s*\n?", "", raw.strip())
     raw = re.sub(r"\n?```\s*$", "", raw.strip())
     return raw.strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  NETTOYAGE LATEX
+#  ASSEMBLAGE HTML FINAL
 # ─────────────────────────────────────────────────────────────────────────────
-def fix_latex(latex_code: str) -> str:
-    """Corrige les erreurs LaTeX courantes générées par le LLM."""
-
-    # 1. Supprimer tout ce qui précède \documentclass
-    match = re.search(r"\\documentclass", latex_code)
-    if match:
-        latex_code = latex_code[match.start():]
-
-    # 2. S'assurer que \begin{document} est présent
-    if "\\begin{document}" not in latex_code:
-        # L'injecter juste après la dernière ligne de préambule (\usepackage, \usetikz, \setlength)
-        lines = latex_code.split("\n")
-        insert_at = 0
-        for i, line in enumerate(lines):
-            if line.strip().startswith("\\") and any(k in line for k in [
-                "\\usepackage", "\\usetikz", "\\setlength", "\\documentclass", "\\newcommand"
-            ]):
-                insert_at = i
-        lines.insert(insert_at + 1, "\\begin{document}")
-        latex_code = "\n".join(lines)
-
-    # 3. S'assurer que \end{document} est présent
-    if "\\end{document}" not in latex_code:
-        latex_code += "\n\\end{document}"
-
-    # 4. Supprimer tcolorbox et xcolor résiduels
-    latex_code = re.sub(r"\\usepackage\[.*?\]\{tcolorbox\}", "", latex_code)
-    latex_code = re.sub(r"\\usepackage\{tcolorbox\}", "", latex_code)
-    latex_code = re.sub(r"\\usepackage(\[.*?\])?\{xcolor\}", "", latex_code)
-    latex_code = re.sub(r"\\usepackage(\[.*?\])?\{color\}", "", latex_code)
-
-    # 5. Remplacer les tcolorbox résiduelles par mdframed
-    latex_code = re.sub(
-        r"\\begin\{tcolorbox\}(\[.*?\])?",
-        r"\\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=40pt]",
-        latex_code
-    )
-    latex_code = re.sub(r"\\end\{tcolorbox\}", r"\\end{mdframed}", latex_code)
-
-    # 6. Traitement ligne par ligne
-    lines = latex_code.split("\n")
-    fixed = []
-    in_tikz = False
-    in_mdframed = False
-    pending_newpage = False
-
-    for line in lines:
-        if "\\begin{tikzpicture}" in line:
-            in_tikz = True
-        if "\\end{tikzpicture}" in line:
-            in_tikz = False
-            fixed.append(line)
-            continue
-
-        if "\\begin{mdframed}" in line:
-            in_mdframed = True
-
-        if "\\end{mdframed}" in line:
-            in_mdframed = False
-            fixed.append(line)
-            if pending_newpage:
-                fixed.append("\\newpage")
-                pending_newpage = False
-            continue
-
-        if in_mdframed and "\\newpage" in line:
-            pending_newpage = True
-            continue
-
-        if not in_tikz and "$" not in line and "verb" not in line and "\\texttt" not in line:
-            line = re.sub(r"(?<!\\)_", r"\\_", line)
-
-        fixed.append(line)
-
-    return "\n".join(fixed)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  COMPILATION LATEX → PDF
-# ─────────────────────────────────────────────────────────────────────────────
-def compile_latex(latex_code: str) -> bytes:
-    """Compile le LaTeX avec pdflatex et retourne les octets du PDF."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tex_path = os.path.join(tmpdir, "sujet.tex")
-        pdf_path = os.path.join(tmpdir, "sujet.pdf")
-
-        with open(tex_path, "w", encoding="utf-8") as f:
-            f.write(latex_code)
-
-        log = ""
-        for _ in range(2):
-            result = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
-                capture_output=True, timeout=60
-            )
-            log = result.stdout.decode("utf-8", errors="replace")
-
-        if not os.path.exists(pdf_path):
-            # Extraire uniquement les lignes d'erreur (commençant par !)
-            error_lines = [l for l in log.split("\n") if l.startswith("!") or l.startswith("l.")]
-            error_summary = "\n".join(error_lines[:30]) if error_lines else log[-3000:]
-            raise HTTPException(
-                500,
-                f"Échec de la compilation LaTeX.\n\nErreurs détectées :\n{error_summary}"
-            )
-
-        with open(pdf_path, "rb") as f:
-            return f.read()
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  UPLOAD FTP
-# ─────────────────────────────────────────────────────────────────────────────
-def upload_ftp(pdf_bytes: bytes, filename: str) -> str:
-    """Envoie le PDF sur le FTP. Retourne l'URL publique ou chaîne vide."""
-    if not FTP_HOST:
-        return ""
-    try:
-        with ftplib.FTP(FTP_HOST, FTP_USER, FTP_PASS) as ftp:
-            ftp.cwd(FTP_REMOTE_PATH)
-            ftp.storbinary(f"STOR {filename}", io.BytesIO(pdf_bytes))
-        return f"{FTP_PUBLIC_URL.rstrip('/')}/{filename}"
-    except Exception as e:
-        print(f"[FTP] Erreur : {e}")
-        return ""
+def assemble_html(contenu: str, theme: str = "") -> str:
+    titre_page = f"Brevet Blanc – {theme}" if theme else "Brevet Blanc Technologie"
+    return f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{titre_page} – Collège Jacques Prévert</title>
+  {BASE_CSS}
+</head>
+<body>
+  <div class="sujet-wrapper">
+    {contenu}
+  </div>
+</body>
+</html>"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  SAUVEGARDE NOTION
 # ─────────────────────────────────────────────────────────────────────────────
-async def save_to_notion(theme: str, filename: str, ftp_url: str, ip: str):
-    """Crée une entrée dans la base Notion."""
+async def save_to_notion(theme: str, ip: str):
     if not NOTION_API_KEY or not NOTION_DATABASE_ID:
         return
-
     now = datetime.datetime.now(datetime.timezone.utc)
+    ts  = now.strftime("%Y%m%d_%H%M%S")
+    filename = f"brevet_blanc_{re.sub(r'[^a-zA-Z0-9]', '_', theme)[:30]}_{ts}"
     properties = {
-        "Nom du fichier": {
-            "title": [{"text": {"content": filename}}]
-        },
-        "Thème": {
-            "rich_text": [{"text": {"content": theme or "Aléatoire"}}]
-        },
-        "Date de génération": {
-            "date": {"start": now.isoformat()}
-        },
-        "IP anonymisée": {
-            "rich_text": [{"text": {"content": ip[:8] + "***"}}]
-        },
-        "URL FTP": {
-            "url": ftp_url if ftp_url else None
-        },
+        "Nom du fichier": {"title": [{"text": {"content": filename}}]},
+        "Thème": {"rich_text": [{"text": {"content": theme or "Aléatoire"}}]},
+        "Date de génération": {"date": {"start": now.isoformat()}},
+        "IP anonymisée": {"rich_text": [{"text": {"content": ip[:8] + "***"}}]},
+        "URL FTP": {"url": None},
     }
-
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             "https://api.notion.com/v1/pages",
@@ -454,10 +608,7 @@ async def save_to_notion(theme: str, filename: str, ftp_url: str, ip: str):
                 "Content-Type": "application/json",
                 "Notion-Version": "2022-06-28",
             },
-            json={
-                "parent": {"database_id": NOTION_DATABASE_ID},
-                "properties": properties,
-            }
+            json={"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
         )
     if resp.status_code not in (200, 201):
         print(f"[Notion] Erreur {resp.status_code}: {resp.text[:300]}")
@@ -468,72 +619,37 @@ async def save_to_notion(theme: str, filename: str, ftp_url: str, ip: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 def health():
-    return {
-        "status": "ok",
-        "service": "Générateur Sujets Techno",
-        "college": "Collège Jacques Prévert"
-    }
+    return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège Jacques Prévert"}
 
 
 @app.post("/generer")
-async def generer_sujet(request: Request):
-    """
-    Endpoint principal appelé par le widget.
-    Body JSON optionnel : { "theme": "Robot aspirateur" }
-    Retourne le PDF en téléchargement direct.
-    """
-
-    # 1. Rate limiting
+async def generer_sujet_post(request: Request):
+    """POST /generer — Body JSON optionnel : { "theme": "Robot aspirateur" }"""
     client_ip = request.client.host
     today = datetime.date.today().isoformat()
     usage[today][client_ip] += 1
-    if usage[today][client_ip] > 7:
-        raise HTTPException(
-            429,
-            "Limite atteinte : 7 sujets par jour par adresse IP. Reviens demain !"
-        )
-
-    # 2. Lecture du thème optionnel
+    if usage[today][client_ip] > 15:
+        raise HTTPException(429, "Limite atteinte : 15 sujets par jour. Reviens demain !")
     try:
         body = await request.json()
         theme = str(body.get("theme", "")).strip()[:80]
     except Exception:
         theme = ""
-
-    # 3. Génération LaTeX via Groq
-    latex_code = await call_groq(theme)
-
-    # 4. Nettoyage du LaTeX
-    latex_code = fix_latex(latex_code)
-
-    # 5. Compilation PDF
-    pdf_bytes = compile_latex(latex_code)
-
-    # 6. Nommage du fichier
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_theme = re.sub(r"[^a-zA-Z0-9]", "_", theme)[:30] if theme else "aleatoire"
-    filename = f"brevet_blanc_{safe_theme}_{ts}.pdf"
-
-    # 7. Upload FTP (non bloquant)
-    ftp_url = await asyncio.to_thread(upload_ftp, pdf_bytes, filename)
-
-    # 8. Sauvegarde Notion (fire and forget)
-    asyncio.create_task(save_to_notion(theme or "Aléatoire", filename, ftp_url, client_ip))
-
-    # 9. Retourne le PDF
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Generated-Theme": theme or "aleatoire",
-        }
-    )
+    contenu_html = await call_groq(theme)
+    page_html = assemble_html(contenu_html, theme)
+    asyncio.create_task(save_to_notion(theme or "Aléatoire", client_ip))
+    return HTMLResponse(content=page_html, status_code=200)
 
 
-@app.get("/latex")
-async def obtenir_latex_brut(theme: str = ""):
-    """Route de débogage : retourne le LaTeX brut sans compiler."""
-    latex_code = await call_groq(theme)
-    latex_code = fix_latex(latex_code)
-    return JSONResponse({"latex": latex_code, "longueur": len(latex_code)})
+@app.get("/generer")
+async def generer_sujet_get(request: Request, theme: str = ""):
+    """GET /generer?theme=Vélo+électrique — pour test direct depuis le navigateur"""
+    client_ip = request.client.host
+    today = datetime.date.today().isoformat()
+    usage[today][client_ip] += 1
+    if usage[today][client_ip] > 10:
+        raise HTTPException(429, "Limite atteinte.")
+    contenu_html = await call_groq(theme)
+    page_html = assemble_html(contenu_html, theme)
+    asyncio.create_task(save_to_notion(theme or "Aléatoire", client_ip))
+    return HTMLResponse(content=page_html, status_code=200)
