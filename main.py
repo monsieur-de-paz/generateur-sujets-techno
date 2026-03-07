@@ -264,13 +264,35 @@ async def call_groq(theme_hint: str = "") -> str:
 def fix_latex(latex_code: str) -> str:
     """Corrige les erreurs LaTeX courantes générées par le LLM."""
 
-    # 1. Supprimer tout appel à tcolorbox ou xcolor s'il en reste
+    # 1. Supprimer tout ce qui précède \documentclass
+    match = re.search(r"\\documentclass", latex_code)
+    if match:
+        latex_code = latex_code[match.start():]
+
+    # 2. S'assurer que \begin{document} est présent
+    if "\\begin{document}" not in latex_code:
+        # L'injecter juste après la dernière ligne de préambule (\usepackage, \usetikz, \setlength)
+        lines = latex_code.split("\n")
+        insert_at = 0
+        for i, line in enumerate(lines):
+            if line.strip().startswith("\\") and any(k in line for k in [
+                "\\usepackage", "\\usetikz", "\\setlength", "\\documentclass", "\\newcommand"
+            ]):
+                insert_at = i
+        lines.insert(insert_at + 1, "\\begin{document}")
+        latex_code = "\n".join(lines)
+
+    # 3. S'assurer que \end{document} est présent
+    if "\\end{document}" not in latex_code:
+        latex_code += "\n\\end{document}"
+
+    # 4. Supprimer tcolorbox et xcolor résiduels
     latex_code = re.sub(r"\\usepackage\[.*?\]\{tcolorbox\}", "", latex_code)
     latex_code = re.sub(r"\\usepackage\{tcolorbox\}", "", latex_code)
     latex_code = re.sub(r"\\usepackage(\[.*?\])?\{xcolor\}", "", latex_code)
     latex_code = re.sub(r"\\usepackage(\[.*?\])?\{color\}", "", latex_code)
 
-    # 2. Remplacer les tcolorbox résiduelles par mdframed
+    # 5. Remplacer les tcolorbox résiduelles par mdframed
     latex_code = re.sub(
         r"\\begin\{tcolorbox\}(\[.*?\])?",
         r"\\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=40pt]",
@@ -278,7 +300,7 @@ def fix_latex(latex_code: str) -> str:
     )
     latex_code = re.sub(r"\\end\{tcolorbox\}", r"\\end{mdframed}", latex_code)
 
-    # 3. Traitement ligne par ligne
+    # 6. Traitement ligne par ligne
     lines = latex_code.split("\n")
     fixed = []
     in_tikz = False
@@ -286,7 +308,6 @@ def fix_latex(latex_code: str) -> str:
     pending_newpage = False
 
     for line in lines:
-        # Suivi des environnements
         if "\\begin{tikzpicture}" in line:
             in_tikz = True
         if "\\end{tikzpicture}" in line:
@@ -305,12 +326,10 @@ def fix_latex(latex_code: str) -> str:
                 pending_newpage = False
             continue
 
-        # Déplacer \newpage hors des mdframed
         if in_mdframed and "\\newpage" in line:
             pending_newpage = True
             continue
 
-        # Échapper les _ hors TikZ et hors mode mathématique
         if not in_tikz and "$" not in line and "verb" not in line and "\\texttt" not in line:
             line = re.sub(r"(?<!\\)_", r"\\_", line)
 
