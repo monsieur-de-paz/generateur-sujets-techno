@@ -15,42 +15,41 @@ import httpx
 
 app = FastAPI(title="Générateur de Sujets – Technologie")
 
-# ── CORS : autorise ton site à appeler ce backend ────────────────────────────
+# ── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Remplace * par l'URL de ton site si tu veux restreindre
+    allow_origins=["*"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# ── Variables d'environnement (à remplir dans Railway > Variables) ────────────
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+# ── Variables d'environnement ─────────────────────────────────────────────────
 NOTION_API_KEY     = os.environ.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 FTP_HOST           = os.environ.get("FTP_HOST", "")
 FTP_USER           = os.environ.get("FTP_USER", "")
 FTP_PASS           = os.environ.get("FTP_PASS", "")
 FTP_REMOTE_PATH    = os.environ.get("FTP_REMOTE_PATH", "/sujets_generes/")
 FTP_PUBLIC_URL     = os.environ.get("FTP_PUBLIC_URL", "")
 
-# ── Rate limiting en mémoire : 3 générations max par IP par jour ─────────────
+# ── Rate limiting ─────────────────────────────────────────────────────────────
 usage: dict = defaultdict(lambda: defaultdict(int))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PROMPT SYSTÈME 
+#  PROMPT SYSTÈME
 # ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = r"""
-Tu es un expert en pédagogie technologique au collège en France (niveaux 4ème et 5ème).
+Tu es un expert en pédagogie technologique au collège en France (niveau 3ème).
 Tu génères des sujets COMPLETS de brevet blanc de TECHNOLOGIE entièrement codés en LaTeX,
 directement compilables avec pdflatex SANS ERREUR.
 
 ═══════════════════════════════════════════════
-RÈGLES LATEX ABSOLUES (à respecter impérativement)
+RÈGLES LATEX ABSOLUES
 ═══════════════════════════════════════════════
 
-1. PACKAGES à déclarer dans le préambule (tous obligatoires) :
+1. PRÉAMBULE OBLIGATOIRE (copier exactement) :
 \documentclass[11pt,a4paper]{article}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -62,63 +61,77 @@ RÈGLES LATEX ABSOLUES (à respecter impérativement)
 \usepackage{enumitem}
 \usepackage{tikz}
 \usepackage{graphicx}
-\usepackage{xcolor}
-\usepackage{etoolbox}
-\usepackage[most,breakable]{tcolorbox}
+\usepackage[framemethod=default]{mdframed}
 \usetikzlibrary{shapes.geometric, arrows.meta, fit, calc, positioning}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.4em}
 
-2. EN-TÊTE OBLIGATOIRE (toujours identique, mot pour mot) :
+2. BOÎTES DE RÉPONSE : utiliser UNIQUEMENT ce format (jamais tcolorbox) :
+\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=VALEUR]
+\end{mdframed}
+
+Valeurs innerbottommargin selon la question :
+- Question courte (2-3 pts) : innerbottommargin=35pt
+- Question développée (4-5 pts) : innerbottommargin=55pt
+- Question calcul : innerbottommargin=70pt, avec 4 lignes de calcul à l'intérieur :
+  \rule{\linewidth}{0.3pt}\\[0.6cm]
+  \rule{\linewidth}{0.3pt}\\[0.6cm]
+  \rule{\linewidth}{0.3pt}\\[0.6cm]
+  \rule{\linewidth}{0.3pt}\\[0.6cm]
+- Question schéma à compléter : insérer le TikZ à compléter à l'intérieur
+
+3. RÈGLES TikZ STRICTES :
+- Toujours [node distance=1.5cm] minimum
+- Largeur nœud : minimum width=2.8cm, maximum width=3.5cm
+- Texte nœuds : align=center, font=\footnotesize\sffamily
+- Maximum 5-6 nœuds par schéma
+- Toujours dans \begin{center}...\end{center}
+- JAMAIS de texte accentué dans TikZ : utiliser \'{e}, \`{a}, \^{o} etc.
+- Nœuds vides pour schémas à compléter : \node[style] (X) at (0,0) {};
+
+4. TABLEAUX : toujours tabularx avec \linewidth.
+
+5. INTERDICTIONS ABSOLUES :
+- Ne jamais utiliser \tcolorbox ni aucun package de couleur (xcolor, color)
+- Ne jamais mettre \newpage à l'intérieur d'un environnement mdframed
+- Ne jamais utiliser _ hors mode mathématique (utiliser \_ ou éviter)
+
+═══════════════════════════════════════════════
+STRUCTURE OBLIGATOIRE
+═══════════════════════════════════════════════
+
+──── EN-TÊTE (toujours identique) ────
+
 \begin{center}
-{\small Technologie – 3\textsuperscript{ème} \hfill Collège – Sujet généré par IA}
+{\small Technologie -- 3\textsuperscript{\`eme} \hfill Coll\`ege -- Sujet g\'en\'er\'e par IA}
 \end{center}
 \begin{center}
 {\LARGE\bfseries [TITRE DU SUJET]}\\[0.3cm]
-{\large Brevet Blanc – Épreuve de Technologie}\\[0.2cm]
-{\normalsize Durée : 30 minutes \quad|\quad 25 points}
+{\large Brevet Blanc -- \'Epreuve de Technologie}\\[0.2cm]
+{\normalsize Dur\'ee : 30 minutes \quad|\quad 25 points}
 \end{center}
-\begin{tabular}{p{5cm}p{5cm}p{5cm}}
-\textbf{Nom :} \hrulefill & \textbf{Prénom :} \hrulefill & \textbf{Classe :} \hrulefill
-\end{tabular}
+\begin{tabularx}{\linewidth}{XXX}
+\textbf{Nom :} \hrulefill & \textbf{Pr\'enom :} \hrulefill & \textbf{Classe :} \hrulefill
+\end{tabularx}
 \vspace{0.5cm}
-
-3. RÈGLES TikZ STRICTES pour éviter les débordements :
-- Toujours utiliser [node distance=1.5cm] minimum
-- Largeur maximale d'un nœud : minimum width=2.8cm, maximum width=3.5cm
-- Texte dans les nœuds : toujours align=center, font=\footnotesize\sffamily
-- Limiter les schémas à 5-6 nœuds maximum
-- Toujours envelopper le tikzpicture dans \begin{center}...\end{center}
-- Ne JAMAIS mettre de texte accentué directement dans TikZ : utiliser \'{e}, \`{a}, \^{o} etc.
-- Pour les schémas à compléter : utiliser des nœuds vides avec \node[composant] (X) at (0,0) {};
-- Utiliser des couleurs si besoin dans les schémas
-
-4. TABLEAUX : toujours utiliser tabularx avec \linewidth, jamais tabular seul.
-
-═══════════════════════════════════════════════
-STRUCTURE OBLIGATOIRE DU SUJET
-═══════════════════════════════════════════════
 
 ──── PARTIE 1 : DOCUMENTS ────
 
-[En-tête + titre + champs élève]
 [Contexte introductif 3-5 lignes]
 
-\subsection*{Document 1 -- [Titre descriptif du principe de fonctionnement]}
-Texte de présentation + schéma TikZ (chaîne fonctionnelle ou schéma blocs)
+\subsection*{Document 1 -- [Titre]}
+Texte + schéma TikZ (chaîne fonctionnelle ou schéma blocs)
 
-\subsection*{Document 2 -- [Titre descriptif]}
-Tableau comparatif de matériaux ou composants (tabularx, 3-4 colonnes, 3-4 lignes)
+\subsection*{Document 2 -- [Titre]}
+Tableau comparatif tabularx (3-4 colonnes, 3-4 lignes)
 
-\subsection*{Document 3 -- [Titre descriptif]}
-Données numériques pour un calcul (formule + valeurs données)
+\subsection*{Document 3 -- [Titre]}
+Données numériques pour calcul (formule + valeurs)
 
-\subsection*{Document 4 -- [Titre descriptif de l'algorigramme]}
+\subsection*{Document 4 -- [Titre algorigramme]}
 Algorigramme TikZ complet
 
 \newpage
-
-Dans tous les cas, la partie 1 peut prendre autant de page que nécessaire pour que les schémas et algorigrammes rentrent sans se chevaucher.
 
 ──── PARTIE 2 : QUESTIONS ────
 
@@ -129,76 +142,60 @@ Dans tous les cas, la partie 1 peut prendre autant de page que nécessaire pour 
 \end{center}
 \vspace{0.3cm}
 
-Chaque question OBLIGATOIREMENT dans ce format exact :
+Format obligatoire pour chaque question :
 \noindent\textbf{Question X -- [titre court]} \hfill \textit{(Y points)}\\[0.1cm]
-[énoncé]
-\begin{tcolorbox}[colback=gray!5, colframe=gray!50, breakable, left=4pt, right=4pt, top=4pt, bottom=VALEUR]
-\end{tcolorbox}
+[énoncé de la question]
+\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=VALEUR]
+\end{mdframed}
 \vspace{0.4cm}
-
-Valeurs bottom selon la question :
-- Question courte (2-3 pts) : bottom=35pt
-- Question développée (4-5 pts) : bottom=55pt
-- Question calcul : bottom=70pt avec lignes de calcul (\rule{\linewidth}{0.3pt}\\[0.6cm] répété 4 fois)
-- Question schéma à compléter : insérer le TikZ du schéma À COMPLÉTER dans la tcolorbox (nœuds vides)
 
 \newpage
 
-──── PARTIE 3 : CORRECTION ENSEIGNANT ────
+──── PARTIE 3 : CORRIGÉ ────
 
 \begin{center}
 \rule{\linewidth}{2pt}\\[0.3cm]
-{\Large\bfseries CORRIGÉ ET BARÈME -- RÉSERVÉ À L'ENSEIGNANT}\\[0.1cm]
+{\Large\bfseries CORRIG\'E ET BAR\`EME -- R\'ESERV\'E \`A L'ENSEIGNANT}\\[0.1cm]
 \rule{\linewidth}{2pt}
 \end{center}
 
-Pour chaque question : réponse attendue + critères de notation précis.
+Pour chaque question : réponse attendue + critères de notation.
 
 ═══════════════════════════════════════════════
-TYPES D'EXERCICES À VARIER (choisir 5 parmi ces types, un par question)
+TYPES D'EXERCICES (choisir 5 parmi ces types)
 ═══════════════════════════════════════════════
 
 TYPE A – ANALYSE FONCTIONNELLE
-Compléter un diagramme des blocs internes (chaîne d'information + chaîne d'énergie).
-→ Schéma TikZ avec nœuds vides à remplir, liste de termes fournie à replacer.
-Termes possibles : Acquérir, Traiter, Communiquer, Alimenter, Distribuer, Convertir.
+Compléter un diagramme des blocs (chaîne d'information + chaîne d'énergie).
+Schéma TikZ avec nœuds vides, liste de termes à replacer.
+Termes : Acquérir, Traiter, Communiquer, Alimenter, Distribuer, Convertir.
 
 TYPE B – MATÉRIAUX ET PROPRIÉTÉS
-Choisir un matériau à partir d'un tableau + justifier avec 3 critères du cahier des charges.
-→ Tableau tabularx + espace de réponse structuré (matériau choisi + 3 lignes argumentées).
+Choisir un matériau depuis un tableau + justifier avec 3 critères.
+Tableau tabularx + espace de réponse structuré.
 
 TYPE C – CALCUL NUMÉRIQUE
-Appliquer une formule donnée (énergie E=P×t, puissance P=U×I, capacité Q=I×t, etc.)
-→ Espace calcul avec lignes + unités attendues.
+Appliquer une formule (E=P*t, P=U*I, Q=I*t, etc.)
+Espace calcul avec lignes + unités attendues.
 
 TYPE D – ALGORIGRAMME
-- Soit compléter un algorigramme à trous (mots-clés manquants : SI, SINON, condition, action)
-- Soit lire un algorigramme et décrire en français ce qu'il fait
-→ Algorigramme TikZ + zone réponse.
+Compléter un algorigramme à trous OU décrire en français ce qu'il fait.
+Algorigramme TikZ + zone réponse.
 
 TYPE E – PROGRAMMATION / ALGORITHME TEXTUEL
-Compléter un algorithme en pseudo-code ou Scratch-like avec des pointillés.
-Thèmes : capteur, condition, boucle, variable, ordre envoyé à un actionneur.
-Exemple de structure à compléter :
-Répéter jusqu'à (fin de mission)
-|  Lire valeur du capteur de .........
-|  SI ( valeur > ......... ) ALORS
-|  |  Activer .........
-|  SINON
-|  |  .........
-|  FIN SI
-Fin Répéter
+Compléter un pseudo-code avec des pointillés.
+Thèmes : capteur, condition, boucle, variable, actionneur.
 
 TYPE F – DÉVELOPPEMENT DURABLE / CYCLE DE VIE
-Identifier la phase du cycle de vie (fabrication, utilisation, fin de vie) concernée.
-Relier matériau et impact environnemental à partir du tableau document 2.
+Identifier la phase du cycle de vie concernée.
+Relier matériau et impact environnemental.
 
-TYPE G – LECTURE DE SCHÉMA / IDENTIFICATION
-Identifier des composants sur un schéma fonctionnel TikZ annoté partiellement.
-Relier composant ↔ fonction (Acquérir / Traiter / Communiquer / Convertir).
+TYPE G – LECTURE DE SCHÉMA
+Identifier des composants sur un schéma TikZ annoté partiellement.
+Relier composant et fonction.
 
-TYPE H – AVANTAGES / INCONVÉNIENTS / USAGE
-Citer 2 avantages et 1 limite du système étudié. Justifier à partir du contexte.
+TYPE H – AVANTAGES / INCONVÉNIENTS
+Citer 2 avantages et 1 limite du système. Justifier.
 
 ═══════════════════════════════════════════════
 CONTRAINTES FINALES
@@ -209,12 +206,13 @@ CONTRAINTES FINALES
 - PAS d'images externes, TOUT en TikZ ou tabularx
 - Varier les thèmes ET les types d'exercices à chaque génération
 
-THÈMES (varier obligatoirement à chaque appel) :
+THÈMES (varier à chaque appel) :
 Robot aspirateur, Fontaine connectée, Vélo électrique, Serrure connectée,
 Lampadaire solaire intelligent, Serre automatisée, Trottinette électrique,
 Purificateur d'air, Bras robotisé pédagogique, Porte automatique,
 Système d'irrigation, Voiture autonome miniature, Pont-levis connecté,
-Distributeur automatique de gel, Capteur de température connecté. Tu peux envisager d'autres thèmes qui ne sont pas dans la liste.
+Distributeur automatique de gel, Capteur de température connecté.
+Tu peux choisir d'autres thèmes non listés.
 
 RÉPONDS UNIQUEMENT avec le code LaTeX complet.
 Commence par \documentclass et termine par \end{document}.
@@ -223,20 +221,23 @@ Zéro texte avant ni après.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  APPEL GroqCloud
+#  APPEL GROQCLOUD
 # ─────────────────────────────────────────────────────────────────────────────
-async def call_gemini(theme_hint: str = "") -> str:
+async def call_groq(theme_hint: str = "") -> str:
     user_message = (
         "Génère un sujet de brevet blanc de technologie complet en LaTeX."
         + (f" Thème : {theme_hint}." if theme_hint else " Choisis un thème varié.")
         + " Le code doit être directement compilable avec pdflatex sans erreur."
+        + " N'utilise jamais tcolorbox ni xcolor. Utilise uniquement mdframed pour les boîtes."
     )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                     "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json={
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
@@ -255,18 +256,37 @@ async def call_gemini(theme_hint: str = "") -> str:
     raw = re.sub(r"^```(?:latex)?\s*\n?", "", raw.strip())
     raw = re.sub(r"\n?```\s*$", "", raw.strip())
     return raw.strip()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  NETTOYAGE LATEX
 # ─────────────────────────────────────────────────────────────────────────────
 def fix_latex(latex_code: str) -> str:
     """Corrige les erreurs LaTeX courantes générées par le LLM."""
+
+    # 1. Supprimer tout appel à tcolorbox ou xcolor s'il en reste
+    latex_code = re.sub(r"\\usepackage\[.*?\]\{tcolorbox\}", "", latex_code)
+    latex_code = re.sub(r"\\usepackage\{tcolorbox\}", "", latex_code)
+    latex_code = re.sub(r"\\usepackage(\[.*?\])?\{xcolor\}", "", latex_code)
+    latex_code = re.sub(r"\\usepackage(\[.*?\])?\{color\}", "", latex_code)
+
+    # 2. Remplacer les tcolorbox résiduelles par mdframed
+    latex_code = re.sub(
+        r"\\begin\{tcolorbox\}(\[.*?\])?",
+        r"\\begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=40pt]",
+        latex_code
+    )
+    latex_code = re.sub(r"\\end\{tcolorbox\}", r"\\end{mdframed}", latex_code)
+
+    # 3. Traitement ligne par ligne
     lines = latex_code.split("\n")
     fixed = []
     in_tikz = False
-    in_tcolorbox = False
+    in_mdframed = False
     pending_newpage = False
 
     for line in lines:
+        # Suivi des environnements
         if "\\begin{tikzpicture}" in line:
             in_tikz = True
         if "\\end{tikzpicture}" in line:
@@ -274,29 +294,30 @@ def fix_latex(latex_code: str) -> str:
             fixed.append(line)
             continue
 
-        if "\\begin{tcolorbox}" in line:
-            in_tcolorbox = True
+        if "\\begin{mdframed}" in line:
+            in_mdframed = True
 
-        if "\\end{tcolorbox}" in line:
-            in_tcolorbox = False
+        if "\\end{mdframed}" in line:
+            in_mdframed = False
             fixed.append(line)
             if pending_newpage:
                 fixed.append("\\newpage")
                 pending_newpage = False
             continue
 
-        # Si \newpage est dans une tcolorbox, on le reporte après
-        if in_tcolorbox and "\\newpage" in line:
+        # Déplacer \newpage hors des mdframed
+        if in_mdframed and "\\newpage" in line:
             pending_newpage = True
             continue
 
-        # Échappe les _ hors TikZ et math
+        # Échapper les _ hors TikZ et hors mode mathématique
         if not in_tikz and "$" not in line and "verb" not in line and "\\texttt" not in line:
             line = re.sub(r"(?<!\\)_", r"\\_", line)
 
         fixed.append(line)
 
     return "\n".join(fixed)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  COMPILATION LATEX → PDF
@@ -350,7 +371,7 @@ def upload_ftp(pdf_bytes: bytes, filename: str) -> str:
 #  SAUVEGARDE NOTION
 # ─────────────────────────────────────────────────────────────────────────────
 async def save_to_notion(theme: str, filename: str, ftp_url: str, ip: str):
-    """Crée une entrée dans la base Notion (colonnes à créer au préalable)."""
+    """Crée une entrée dans la base Notion."""
     if not NOTION_API_KEY or not NOTION_DATABASE_ID:
         return
 
@@ -405,49 +426,49 @@ def health():
 @app.post("/generer")
 async def generer_sujet(request: Request):
     """
-    Endpoint principal appelé par le widget sur le site.
+    Endpoint principal appelé par le widget.
     Body JSON optionnel : { "theme": "Robot aspirateur" }
     Retourne le PDF en téléchargement direct.
     """
 
-    # 1. Rate limiting ─────────────────────────────────────────────────────
+    # 1. Rate limiting
     client_ip = request.client.host
     today = datetime.date.today().isoformat()
     usage[today][client_ip] += 1
     if usage[today][client_ip] > 7:
         raise HTTPException(
             429,
-            "Limite atteinte : 3 sujets par jour par adresse IP. Reviens demain !"
+            "Limite atteinte : 7 sujets par jour par adresse IP. Reviens demain !"
         )
 
-    # 2. Lecture du thème optionnel ────────────────────────────────────────
+    # 2. Lecture du thème optionnel
     try:
         body = await request.json()
         theme = str(body.get("theme", "")).strip()[:80]
     except Exception:
         theme = ""
 
-    # 3. Génération LaTeX via Gemini ───────────────────────────────────────
-    latex_code = await call_gemini(theme)
+    # 3. Génération LaTeX via Groq
+    latex_code = await call_groq(theme)
 
-    # 3b. Nettoyage du LaTeX ───────────────────────────────────────────────
+    # 4. Nettoyage du LaTeX
     latex_code = fix_latex(latex_code)
 
-    # 4. Compilation PDF ───────────────────────────────────────────────────
+    # 5. Compilation PDF
     pdf_bytes = compile_latex(latex_code)
 
-    # 5. Nommage du fichier ────────────────────────────────────────────────
+    # 6. Nommage du fichier
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_theme = re.sub(r"[^a-zA-Z0-9]", "_", theme)[:30] if theme else "aleatoire"
     filename = f"brevet_blanc_{safe_theme}_{ts}.pdf"
 
-    # 6. Upload FTP (non bloquant) ─────────────────────────────────────────
+    # 7. Upload FTP (non bloquant)
     ftp_url = await asyncio.to_thread(upload_ftp, pdf_bytes, filename)
 
-    # 7. Sauvegarde Notion (fire and forget) ───────────────────────────────
+    # 8. Sauvegarde Notion (fire and forget)
     asyncio.create_task(save_to_notion(theme or "Aléatoire", filename, ftp_url, client_ip))
 
-    # 8. Retourne le PDF ───────────────────────────────────────────────────
+    # 9. Retourne le PDF
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
@@ -461,6 +482,6 @@ async def generer_sujet(request: Request):
 @app.get("/latex")
 async def obtenir_latex_brut(theme: str = ""):
     """Route de débogage : retourne le LaTeX brut sans compiler."""
-    latex_code = await call_gemini(theme)
+    latex_code = await call_groq(theme)
     latex_code = fix_latex(latex_code)
     return JSONResponse({"latex": latex_code, "longueur": len(latex_code)})
