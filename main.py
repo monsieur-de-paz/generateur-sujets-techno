@@ -271,10 +271,10 @@ def compile_latex(latex_code: str) -> bytes:
         log = ""
         for _ in range(2):
             result = subprocess.run(
-    ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
-    capture_output=True, timeout=60
-)
-log = result.stdout.decode("utf-8", errors="replace")
+                ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir, tex_path],
+                capture_output=True, timeout=60
+            )
+            log = result.stdout.decode("utf-8", errors="replace")
 
         if not os.path.exists(pdf_path):
             raise HTTPException(
