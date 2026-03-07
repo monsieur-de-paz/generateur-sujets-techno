@@ -39,35 +39,53 @@ usage: dict = defaultdict(lambda: defaultdict(int))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PROMPT SYSTÈME – instruit Gemini sur le format LaTeX attendu
+#  PROMPT SYSTÈME 
 # ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = r"""
 Tu es un expert en pédagogie technologique au collège en France (niveaux 4ème et 5ème).
 Tu génères des sujets COMPLETS de brevet blanc de TECHNOLOGIE entièrement codés en LaTeX.
 
-STRUCTURE OBLIGATOIRE DU SUJET :
-1. En-tête : "Technologie – 4ème" (ou 5ème) + "Collège Jacques Prévert – Monsieur de PAZ"
-2. Titre principal centré (objet technique du sujet)
-3. Sous-titre "Brevet Blanc – Épreuve de Technologie" + durée 45 min + 25 points
-4. Champs élève : Nom / Prénom / Classe
-5. Contexte introductif (3-5 lignes) sur l'objet technique
-6. 4 Documents numérotés :
-   - Document 1 : texte de présentation du système + schéma fonctionnel TikZ
-   - Document 2 : tableau comparatif de matériaux (tabularx)
-   - Document 3 : données numériques pour un calcul
-   - Document 4 : algorigramme TikZ complet
-7. 5 Questions avec barème visible (total = 25 pts)
-8. Page DOCUMENT ANNEXE (à rendre avec la copie) avec espaces de réponse
+STRUCTURE OBLIGATOIRE DU SUJET (dans cet ordre exact) :
+
+═══ PAGE 1 : DOCUMENTS ═══
+- En-tête : "Technologie – 4ème" + "Collège Jacques Prévert – Monsieur de PAZ"
+- Titre principal centré en grand + sous-titre "Brevet Blanc – Épreuve de Technologie"
+- Durée 45 min, 25 points, champs Nom/Prénom/Classe
+- Contexte introductif (3-5 lignes)
+- \subsection*{Document 1 -- [Titre descriptif]} : texte + schéma fonctionnel TikZ
+- \subsection*{Document 2 -- [Titre descriptif]} : tableau comparatif (tabularx)
+- \subsection*{Document 3 -- [Titre descriptif]} : données numériques pour calcul
+- \subsection*{Document 4 -- [Titre descriptif]} : algorigramme TikZ complet
+- \newpage
+
+═══ PAGE 2 : QUESTIONS ═══
+Commence par une ligne de séparation visuelle avec ce bloc OBLIGATOIRE :
+\begin{center}
+\rule{\linewidth}{1.5pt}\\[0.3cm]
+{\Large\bfseries QUESTIONS}\\[0.1cm]
+\rule{\linewidth}{1.5pt}
+\end{center}
+
+Puis chaque question OBLIGATOIREMENT dans ce format :
+\textbf{Question X (Y points)}\\
+[énoncé de la question]
+\begin{tcolorbox}[colback=gray!5, colframe=gray!40, title=Réponse :, fonttitle=\bfseries, left=4pt, right=4pt, top=4pt, bottom=40pt]
+\end{tcolorbox}
+\vspace{0.3cm}
+
+Pour la question de calcul, mettre bottom=60pt.
+Pour les questions longues (6+ pts), mettre bottom=70pt.
 
 CONTRAINTES LaTeX STRICTES :
 - Packages requis : geometry, tabularx, tikz, tcolorbox, enumitem, amsmath, babel[french]
-- usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit}
+- \usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit}
 - Les schémas sont UNIQUEMENT en TikZ, jamais d'images externes
 - Total barème = exactement 25 points
 - Tout en français avec accents LaTeX corrects (\'{e}, \`{a}, etc.)
-- \newpage entre le sujet, les questions et l'annexe
+- PAS de page DOCUMENT ANNEXE séparée : les espaces de réponse sont directement sous chaque question
+- Les \subsection* des documents doivent avoir un titre descriptif, jamais juste un numéro
 
-THÈMES POSSIBLES (changer à chaque génération) :
+THÈMES POSSIBLES (varier à chaque génération) :
 Robot aspirateur autonome, Fontaine connectée, Vélo électrique, Serrure connectée,
 Lampadaire solaire intelligent, Serre automatisée, Trottinette électrique,
 Purificateur d'air, Bras robotisé pédagogique, Porte automatique de collège,
