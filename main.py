@@ -42,13 +42,13 @@ usage: dict = defaultdict(lambda: defaultdict(int))
 #  PROMPT SYSTÈME 
 # ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = r"""
-Tu es un expert en pédagogie technologique au collège en France (niveaux 4ème et 5ème).
+Tu es un expert en pédagogie technologique au collège en France (niveaux 5eme 4eme et 3eme).
 Tu génères des sujets COMPLETS de brevet blanc de TECHNOLOGIE entièrement codés en LaTeX.
 
 STRUCTURE OBLIGATOIRE DU SUJET (dans cet ordre exact) :
 
-═══ PAGE 1 : DOCUMENTS ═══
-- En-tête : "Technologie – 4ème" + "Collège Jacques Prévert – Monsieur de PAZ"
+═══ PARTIE 1 : DOCUMENTS ═══
+- En-tête : "Technologie – 3ème" + "Collège – Sujet généré avec de l'IA"
 - Titre principal centré en grand + sous-titre "Brevet Blanc – Épreuve de Technologie"
 - Durée 45 min, 25 points, champs Nom/Prénom/Classe
 - Contexte introductif (3-5 lignes)
@@ -58,7 +58,7 @@ STRUCTURE OBLIGATOIRE DU SUJET (dans cet ordre exact) :
 - \subsection*{Document 4 -- [Titre descriptif]} : algorigramme TikZ complet
 - \newpage
 
-═══ PAGE 2 : QUESTIONS ═══
+═══ PARTIE 2 : QUESTIONS ═══
 Commence par une ligne de séparation visuelle avec ce bloc OBLIGATOIRE :
 \begin{center}
 \rule{\linewidth}{1.5pt}\\[0.3cm]
@@ -75,6 +75,9 @@ Puis chaque question OBLIGATOIREMENT dans ce format :
 
 Pour la question de calcul, mettre bottom=60pt.
 Pour les questions longues (6+ pts), mettre bottom=70pt.
+
+═══ PARTIE 3 : CORRECTION ═══
+Propose une correction pour chaque questions du sujet, avec plusieurs formulations si il était possible de répondre plusieurs formulations.
 
 CONTRAINTES LaTeX STRICTES :
 - Packages requis : geometry, tabularx, tikz, tcolorbox, enumitem, amsmath, babel[french]
