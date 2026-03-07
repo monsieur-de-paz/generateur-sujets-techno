@@ -371,7 +371,7 @@ async def generer_sujet(request: Request):
     client_ip = request.client.host
     today = datetime.date.today().isoformat()
     usage[today][client_ip] += 1
-    if usage[today][client_ip] > 3:
+    if usage[today][client_ip] > 7:
         raise HTTPException(
             429,
             "Limite atteinte : 3 sujets par jour par adresse IP. Reviens demain !"
