@@ -64,7 +64,8 @@ RÈGLES LATEX ABSOLUES
 \usepackage[framemethod=default]{mdframed}
 \usetikzlibrary{shapes.geometric, arrows.meta, fit, calc, positioning}
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{0.4em}
+\setlength{\parskip}{0.6em}
+\usepackage{needspace}
 
 2. BOÎTES DE RÉPONSE : utiliser UNIQUEMENT ce format (jamais tcolorbox) :
 \begin{mdframed}[linecolor=black!40, linewidth=0.6pt, innerleftmargin=6pt, innerrightmargin=6pt, innertopmargin=4pt, innerbottommargin=VALEUR]
@@ -117,19 +118,43 @@ STRUCTURE OBLIGATOIRE
 
 ──── PARTIE 1 : DOCUMENTS ────
 
-[Contexte introductif 3-5 lignes]
+[Contexte introductif 5-8 lignes, très détaillé : décrire le système, son utilité, ses composants principaux, son contexte d'usage réel]
 
-\subsection*{Document 1 -- [Titre]}
-Texte + schéma TikZ (chaîne fonctionnelle ou schéma blocs)
+\subsection*{Document 1 -- [Titre très descriptif]}
+Texte de présentation DÉTAILLÉ (5-8 lignes) décrivant précisément le fonctionnement du système.
+Puis schéma TikZ COMPLET de la chaîne fonctionnelle avec TOUS les blocs :
+- Chaîne d'information : Acquérir → Traiter → Communiquer
+- Chaîne d'énergie : Alimenter → Distribuer → Convertir
+- Relier les deux chaînes avec des flèches
+- Chaque nœud doit contenir le nom du composant réel (ex: "Capteur DHT22" pas juste "Capteur")
+- Minimum 6 nœuds, maximum 8 nœuds
+Si le schéma est grand, ajouter \newpage avant le document suivant.
 
-\subsection*{Document 2 -- [Titre]}
-Tableau comparatif tabularx (3-4 colonnes, 3-4 lignes)
+\newpage
 
-\subsection*{Document 3 -- [Titre]}
-Données numériques pour calcul (formule + valeurs)
+\subsection*{Document 2 -- [Titre très descriptif]}
+Tableau comparatif DÉTAILLÉ tabularx (4-5 colonnes, 4-5 lignes).
+Chaque cellule doit contenir des données réelles et précises (valeurs chiffrées, unités, caractéristiques techniques).
+Ajouter 3-4 lignes de texte explicatif APRÈS le tableau pour contextualiser les données.
 
-\subsection*{Document 4 -- [Titre algorigramme]}
-Algorigramme TikZ complet
+\newpage
+
+\subsection*{Document 3 -- [Titre très descriptif]}
+Données numériques COMPLÈTES pour un calcul :
+- Présenter le contexte en 3-4 lignes
+- Donner la formule avec explication de chaque variable
+- Donner toutes les valeurs numériques avec unités
+- Poser la question de calcul clairement
+
+\newpage
+
+\subsection*{Document 4 -- [Titre très descriptif de l'algorigramme]}
+Texte d'introduction de l'algorigramme (3-4 lignes).
+Algorigramme TikZ COMPLET et DÉTAILLÉ :
+- Minimum 8 étapes (Début, 2-3 conditions SI/SINON, 3-4 actions, Fin)
+- Chaque nœud avec texte explicite et composant réel nommé
+- Utiliser des formes distinctes : rectangle pour actions, losange pour conditions, ovale pour Début/Fin
+- Flèches étiquetées OUI/NON sur les conditions
 
 \newpage
 
@@ -205,6 +230,13 @@ CONTRAINTES FINALES
 - Langue : français intégral
 - PAS d'images externes, TOUT en TikZ ou tabularx
 - Varier les thèmes ET les types d'exercices à chaque génération
+- Chaque document doit occuper AU MINIMUM une demi-page
+- Les schémas TikZ doivent être grands et lisibles (scale=1.2 minimum)
+- Les algorigrammes doivent avoir minimum 8 étapes
+- Les tableaux doivent avoir minimum 4 colonnes et 4 lignes avec données réelles
+- Utiliser \vspace{0.5cm} généreusement entre les éléments
+- Utiliser \newpage entre chaque document pour garantir la lisibilité
+- Nommer les composants avec leurs références réelles (Arduino, DHT22, L293D, etc.)
 
 THÈMES (varier à chaque appel) :
 Robot aspirateur, Fontaine connectée, Vélo électrique, Serrure connectée,
