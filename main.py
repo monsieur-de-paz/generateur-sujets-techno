@@ -253,7 +253,18 @@ async def call_gemini(theme_hint: str = "") -> str:
     raw = re.sub(r"^```(?:latex)?\s*\n?", "", raw.strip())
     raw = re.sub(r"\n?```\s*$", "", raw.strip())
     return raw.strip()
-
+# ─────────────────────────────────────────────────────────────────────────────
+#  NETTOYAGE LATEX
+# ─────────────────────────────────────────────────────────────────────────────
+def fix_latex(latex_code: str) -> str:
+    """Corrige les erreurs LaTeX courantes générées par le LLM."""
+    lines = latex_code.split("\n")
+    fixed = []
+    for line in lines:
+        if "$" not in line and "verb" not in line and "\\texttt" not in line:
+            line = re.sub(r"(?<!\\)_", r"\\_", line)
+        fixed.append(line)
+    return "\n".join(fixed)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  COMPILATION LATEX → PDF
@@ -387,6 +398,9 @@ async def generer_sujet(request: Request):
     # 3. Génération LaTeX via Gemini ───────────────────────────────────────
     latex_code = await call_gemini(theme)
 
+    # 3b. Nettoyage du LaTeX ───────────────────────────────────────────────
+    latex_code = fix_latex(latex_code)
+
     # 4. Compilation PDF ───────────────────────────────────────────────────
     pdf_bytes = compile_latex(latex_code)
 
@@ -416,4 +430,5 @@ async def generer_sujet(request: Request):
 async def obtenir_latex_brut(theme: str = ""):
     """Route de débogage : retourne le LaTeX brut sans compiler."""
     latex_code = await call_gemini(theme)
+    latex_code = fix_latex(latex_code)
     return JSONResponse({"latex": latex_code, "longueur": len(latex_code)})
