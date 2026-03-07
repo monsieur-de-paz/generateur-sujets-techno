@@ -63,7 +63,8 @@ RÈGLES LATEX ABSOLUES (à respecter impérativement)
 \usepackage{tikz}
 \usepackage{graphicx}
 \usepackage{xcolor}
-\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\usepackage[most,breakable]{tcolorbox}
 \usetikzlibrary{shapes.geometric, arrows.meta, fit, calc, positioning}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.4em}
@@ -131,7 +132,7 @@ Dans tous les cas, la partie 1 peut prendre autant de page que nécessaire pour 
 Chaque question OBLIGATOIREMENT dans ce format exact :
 \noindent\textbf{Question X -- [titre court]} \hfill \textit{(Y points)}\\[0.1cm]
 [énoncé]
-\begin{tcolorbox}[colback=gray!5, colframe=gray!50, left=4pt, right=4pt, top=4pt, bottom=VALEUR]
+\begin{tcolorbox}[colback=gray!5, colframe=gray!50, breakable, left=4pt, right=4pt, top=4pt, bottom=VALEUR]
 \end{tcolorbox}
 \vspace{0.4cm}
 
