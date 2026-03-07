@@ -331,7 +331,6 @@ def compile_latex(latex_code: str) -> bytes:
         with open(tex_path, "w", encoding="utf-8") as f:
             f.write(latex_code)
 
-        # Deux passes pour résoudre les références internes
         log = ""
         for _ in range(2):
             result = subprocess.run(
@@ -341,14 +340,16 @@ def compile_latex(latex_code: str) -> bytes:
             log = result.stdout.decode("utf-8", errors="replace")
 
         if not os.path.exists(pdf_path):
+            # Extraire uniquement les lignes d'erreur (commençant par !)
+            error_lines = [l for l in log.split("\n") if l.startswith("!") or l.startswith("l.")]
+            error_summary = "\n".join(error_lines[:30]) if error_lines else log[-3000:]
             raise HTTPException(
                 500,
-                f"Échec de la compilation LaTeX.\n\nLog (fin) :\n{log[-2000:]}"
+                f"Échec de la compilation LaTeX.\n\nErreurs détectées :\n{error_summary}"
             )
 
         with open(pdf_path, "rb") as f:
             return f.read()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  UPLOAD FTP
