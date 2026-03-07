@@ -27,6 +27,7 @@ app.add_middleware(
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 NOTION_API_KEY     = os.environ.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 FTP_HOST           = os.environ.get("FTP_HOST", "")
 FTP_USER           = os.environ.get("FTP_USER", "")
 FTP_PASS           = os.environ.get("FTP_PASS", "")
@@ -79,42 +80,35 @@ Aucun texte avant ni après le code LaTeX.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  APPEL GEMINI
+#  APPEL GroqCloud
 # ─────────────────────────────────────────────────────────────────────────────
 async def call_gemini(theme_hint: str = "") -> str:
-    """Appelle l'API Gemini et retourne le LaTeX généré."""
     user_message = (
         "Génère un sujet de brevet blanc de technologie complet en LaTeX."
-        + (f" Thème : {theme_hint}." if theme_hint else " Choisis un thème parmi la liste.")
+        + (f" Thème : {theme_hint}." if theme_hint else " Choisis un thème varié.")
         + " Le code doit être directement compilable avec pdflatex sans erreur."
     )
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
-    )
-    payload = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"parts": [{"text": user_message}]}],
-        "generationConfig": {
-            "temperature": 0.75,
-            "maxOutputTokens": 8192,
-        }
-    }
-
     async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(url, json=payload)
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_message}
+                ],
+                "temperature": 0.75,
+                "max_tokens": 8192,
+            }
+        )
 
     if resp.status_code != 200:
-        raise HTTPException(502, f"Erreur Gemini ({resp.status_code}): {resp.text[:500]}")
+        raise HTTPException(502, f"Erreur Groq ({resp.status_code}): {resp.text[:500]}")
 
-    data = resp.json()
-    try:
-        raw = data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        raise HTTPException(502, "Réponse Gemini inattendue.")
-
-    # Nettoie les balises ```latex … ``` si Gemini les ajoute quand même
+    raw = resp.json()["choices"][0]["message"]["content"]
     raw = re.sub(r"^```(?:latex)?\s*\n?", "", raw.strip())
     raw = re.sub(r"\n?```\s*$", "", raw.strip())
     return raw.strip()
