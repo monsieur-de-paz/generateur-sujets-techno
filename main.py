@@ -263,6 +263,9 @@ def fix_latex(latex_code: str) -> str:
     lines = latex_code.split("\n")
     fixed = []
     in_tikz = False
+    in_tcolorbox = False
+    pending_newpage = False
+
     for line in lines:
         if "\\begin{tikzpicture}" in line:
             in_tikz = True
@@ -270,10 +273,29 @@ def fix_latex(latex_code: str) -> str:
             in_tikz = False
             fixed.append(line)
             continue
-        # N'échappe les _ que hors des environnements TikZ et math
+
+        if "\\begin{tcolorbox}" in line:
+            in_tcolorbox = True
+
+        if "\\end{tcolorbox}" in line:
+            in_tcolorbox = False
+            fixed.append(line)
+            if pending_newpage:
+                fixed.append("\\newpage")
+                pending_newpage = False
+            continue
+
+        # Si \newpage est dans une tcolorbox, on le reporte après
+        if in_tcolorbox and "\\newpage" in line:
+            pending_newpage = True
+            continue
+
+        # Échappe les _ hors TikZ et math
         if not in_tikz and "$" not in line and "verb" not in line and "\\texttt" not in line:
             line = re.sub(r"(?<!\\)_", r"\\_", line)
+
         fixed.append(line)
+
     return "\n".join(fixed)
 
 # ─────────────────────────────────────────────────────────────────────────────
