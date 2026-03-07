@@ -2,7 +2,6 @@
 =============================================================
   Générateur de sujets de Brevet Blanc – Technologie
   Collège Jacques Prévert – M. de PAZ
-  Backend FastAPI – Déployé sur Railway
 =============================================================
 """
 
@@ -377,7 +376,7 @@ STRUCTURE OBLIGATOIRE
 ════════════════════════════════════════════════
 
 <div class="print-bar">
-  <span>Collège Jacques Prévert – M. de PAZ – Brevet Blanc Technologie</span>
+  <span>Collège – Sujet généré par IA – Brevet Blanc Technologie</span>
   <button class="btn-print" onclick="imprimerSujet()">🖨️ Imprimer / Enregistrer PDF</button>
 </div>
 
@@ -385,7 +384,7 @@ STRUCTURE OBLIGATOIRE
 
   <div class="entete-meta">
     <span>Technologie – 3ème</span>
-    <span>Collège Jacques Prévert – Sujet généré par IA</span>
+    <span>Collège – Sujet généré par IA</span>
   </div>
   <div class="entete-titre">
     <h1>[TITRE EN MAJUSCULES]</h1>
@@ -573,7 +572,7 @@ def assemble_html(contenu: str, theme: str = "") -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{titre_page} – Collège Jacques Prévert</title>
+  <title>{titre_page} – Collège</title>
   {BASE_CSS}
 </head>
 <body>
@@ -619,7 +618,7 @@ async def save_to_notion(theme: str, ip: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 def health():
-    return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège Jacques Prévert"}
+    return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège"}
 
 
 @app.post("/generer")
