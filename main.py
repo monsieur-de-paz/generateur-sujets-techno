@@ -79,10 +79,10 @@ Aucun texte avant ni après le code LaTeX.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  APPEL GEMINI 1.5 FLASH
+#  APPEL GEMINI
 # ─────────────────────────────────────────────────────────────────────────────
 async def call_gemini(theme_hint: str = "") -> str:
-    """Appelle l'API Gemini 1.5 Flash et retourne le LaTeX généré."""
+    """Appelle l'API Gemini et retourne le LaTeX généré."""
     user_message = (
         "Génère un sujet de brevet blanc de technologie complet en LaTeX."
         + (f" Thème : {theme_hint}." if theme_hint else " Choisis un thème parmi la liste.")
@@ -91,7 +91,7 @@ async def call_gemini(theme_hint: str = "") -> str:
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     )
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
