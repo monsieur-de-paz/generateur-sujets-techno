@@ -1,0 +1,17 @@
+# nixpacks.toml
+# Ce fichier indique à Railway d'installer pdflatex (TexLive)
+# en plus des dépendances Python habituelles.
+
+[phases.setup]
+aptPkgs = [
+  "texlive-latex-base",
+  "texlive-latex-extra",
+  "texlive-latex-recommended",
+  "texlive-lang-french",
+  "texlive-pictures",
+  "texlive-science",
+  "lmodern"
+]
+
+[start]
+cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
