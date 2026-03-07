@@ -98,7 +98,7 @@ Valeurs innerbottommargin selon la question :
 - Ne jamais utiliser _ hors mode mathématique (utiliser \_ ou éviter)
 
 ═══════════════════════════════════════════════
-STRUCTURE OBLIGATOIRE
+STRUCTURE OBLIGATOIRE À SUIVRE DANS TOUS LES CAS
 ═══════════════════════════════════════════════
 
 ──── EN-TÊTE (toujours identique) ────
@@ -124,10 +124,9 @@ STRUCTURE OBLIGATOIRE
 Texte de présentation DÉTAILLÉ (5-8 lignes) décrivant précisément le fonctionnement du système.
 Puis schéma TikZ COMPLET de la chaîne fonctionnelle avec TOUS les blocs :
 - Chaîne d'information : Acquérir → Traiter → Communiquer
-- Chaîne d'énergie : Alimenter → Distribuer → Convertir
-- Relier les deux chaînes avec des flèches
+- Saute une ligne en suite
+- Chaîne d'énergie : autant de blocs que nécessaire
 - Chaque nœud doit contenir le nom du composant réel (ex: "Capteur DHT22" pas juste "Capteur")
-- Minimum 6 nœuds, maximum 8 nœuds
 Si le schéma est grand, ajouter \newpage avant le document suivant.
 
 \newpage
@@ -185,6 +184,7 @@ Format obligatoire pour chaque question :
 \end{center}
 
 Pour chaque question : réponse attendue + critères de notation.
+Saute une ligne pour chaque questions.
 
 ═══════════════════════════════════════════════
 TYPES D'EXERCICES (choisir 5 parmi ces types)
