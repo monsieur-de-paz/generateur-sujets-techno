@@ -261,8 +261,16 @@ def fix_latex(latex_code: str) -> str:
     """Corrige les erreurs LaTeX courantes générées par le LLM."""
     lines = latex_code.split("\n")
     fixed = []
+    in_tikz = False
     for line in lines:
-        if "$" not in line and "verb" not in line and "\\texttt" not in line:
+        if "\\begin{tikzpicture}" in line:
+            in_tikz = True
+        if "\\end{tikzpicture}" in line:
+            in_tikz = False
+            fixed.append(line)
+            continue
+        # N'échappe les _ que hors des environnements TikZ et math
+        if not in_tikz and "$" not in line and "verb" not in line and "\\texttt" not in line:
             line = re.sub(r"(?<!\\)_", r"\\_", line)
         fixed.append(line)
     return "\n".join(fixed)
