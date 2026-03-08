@@ -5,7 +5,7 @@
 =============================================================
 """
 
-import os, io, datetime, re, asyncio, logging
+import os, io, datetime, re, asyncio, logging, ftplib
 from collections import defaultdict
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -35,6 +35,13 @@ app.add_middleware(
 NOTION_API_KEY     = os.environ.get("NOTION_API_KEY", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
+
+# ── FTP ───────────────────────────────────────────────────────────────────────
+FTP_HOST     = os.environ.get("FTP_HOST", "")       # ex: ftp.sandrodepaz.fr
+FTP_USER     = os.environ.get("FTP_USER", "")       # ton identifiant FTP
+FTP_PASSWORD = os.environ.get("FTP_PASSWORD", "")   # ton mot de passe FTP
+FTP_PATH     = os.environ.get("FTP_PATH", "/generateur/sujets")  # dossier sur le serveur
+FTP_BASE_URL = os.environ.get("FTP_BASE_URL", "https://www.sandrodepaz.fr/generateur/sujets")  # URL publique
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 usage: dict = defaultdict(lambda: defaultdict(int))
@@ -593,179 +600,103 @@ def assemble_html(contenu: str, theme: str = "") -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SAUVEGARDE NOTION — upload du fichier HTML + page de base de données
+#  FTP — upload + liste des sujets
 # ─────────────────────────────────────────────────────────────────────────────
 
-NOTION_HEADERS = lambda: {
-    "Authorization": f"Bearer {NOTION_API_KEY}",
-    "Notion-Version": "2022-06-28",
-}
-
-
-async def upload_html_file(filename: str, html_bytes: bytes, client: httpx.AsyncClient) -> str | None:
+def ftp_upload(filename: str, html_bytes: bytes) -> str | None:
     """
-    Tente d'uploader le fichier HTML via l'API Notion File Upload.
+    Upload synchrone du fichier HTML sur le serveur FTP.
     Retourne l'URL publique du fichier si succès, None sinon.
-
-    L'API Notion File Upload fonctionne en 2 étapes :
-      1. POST /v1/files  →  obtenir un upload_url signé
-      2. PUT upload_url  →  envoyer le fichier binaire
+    Exécuté dans un thread séparé pour ne pas bloquer asyncio.
     """
+    if not FTP_HOST or not FTP_USER or not FTP_PASSWORD:
+        log.warning("[FTP] Variables manquantes (FTP_HOST / FTP_USER / FTP_PASSWORD).")
+        return None
     try:
-        # ── Étape 1 : demander une URL d'upload signée ────────────────────────
-        r1 = await client.post(
-            "https://api.notion.com/v1/files",
-            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
-            json={
-                "name": filename,
-                "content_type": "text/html",
-            },
-            timeout=15.0,
-        )
-        log.info("[Notion Upload] Étape 1 — status %s", r1.status_code)
-
-        if r1.status_code not in (200, 201):
-            log.warning("[Notion Upload] Étape 1 échouée : %s", r1.text[:300])
-            return None
-
-        data1 = r1.json()
-        upload_url  = data1.get("upload_url")
-        file_id     = data1.get("id")
-
-        if not upload_url or not file_id:
-            log.warning("[Notion Upload] Réponse étape 1 inattendue : %s", data1)
-            return None
-
-        # ── Étape 2 : envoyer le fichier ──────────────────────────────────────
-        r2 = await client.put(
-            upload_url,
-            content=html_bytes,
-            headers={"Content-Type": "text/html"},
-            timeout=30.0,
-        )
-        log.info("[Notion Upload] Étape 2 — status %s", r2.status_code)
-
-        if r2.status_code not in (200, 201, 204):
-            log.warning("[Notion Upload] Étape 2 échouée : %s", r2.text[:300])
-            return None
-
-        # L'URL publique est soit dans la réponse étape 2, soit dans étape 1
-        file_url = r2.json().get("url") or data1.get("url") or f"notion://file/{file_id}"
-        log.info("[Notion Upload] ✅ Fichier uploadé → %s", file_url)
-        return file_url
-
+        with ftplib.FTP(FTP_HOST, timeout=20) as ftp:
+            ftp.login(FTP_USER, FTP_PASSWORD)
+            # Créer le dossier cible s'il n'existe pas
+            try:
+                ftp.mkd(FTP_PATH)
+                log.info("[FTP] Dossier créé : %s", FTP_PATH)
+            except ftplib.error_perm:
+                pass  # dossier déjà existant, c'est normal
+            ftp.cwd(FTP_PATH)
+            ftp.storbinary(f"STOR {filename}", io.BytesIO(html_bytes))
+        url = f"{FTP_BASE_URL.rstrip('/')}/{filename}"
+        log.info("[FTP] ✅ Fichier uploadé → %s", url)
+        return url
     except Exception as e:
-        log.error("[Notion Upload] Exception : %s", e)
+        log.error("[FTP] ❌ Erreur upload : %s", e)
         return None
 
 
-async def save_to_notion(theme: str, ip: str, html_content: str):
+def ftp_list_files() -> list[dict]:
     """
-    1. Upload le fichier HTML dans Notion
-    2. Crée une page dans la base de données avec le fichier attaché
+    Liste tous les fichiers .html dans FTP_PATH.
+    Retourne une liste de dicts triés du plus récent au plus ancien :
+    [{ "filename": "sujet_Robot_20250308_143022.html", "url": "...", "theme": "Robot", "date": "08/03/2025 14:30" }]
     """
-    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-        log.warning("[Notion] Variables manquantes — sauvegarde ignorée.")
-        return
+    if not FTP_HOST or not FTP_USER or not FTP_PASSWORD:
+        return []
+    try:
+        fichiers = []
+        with ftplib.FTP(FTP_HOST, timeout=15) as ftp:
+            ftp.login(FTP_USER, FTP_PASSWORD)
+            try:
+                ftp.cwd(FTP_PATH)
+            except ftplib.error_perm:
+                return []  # dossier pas encore créé
+            lines = []
+            ftp.retrlines("LIST", lines.append)
 
+        for line in lines:
+            parts = line.split(None, 8)
+            if len(parts) < 9:
+                continue
+            fname = parts[8]
+            if not fname.endswith(".html"):
+                continue
+            # Extraire thème et date depuis le nom : sujet_THEME_YYYYMMDD_HHMMSS.html
+            m = re.match(r"sujet_(.+?)_(\d{8})_(\d{6})\.html$", fname)
+            if m:
+                theme_raw = m.group(1).replace("_", " ")
+                d, t = m.group(2), m.group(3)
+                date_fmt = f"{d[6:8]}/{d[4:6]}/{d[0:4]} {t[0:2]}:{t[2:4]}"
+                sort_key = m.group(2) + m.group(3)
+            else:
+                theme_raw = fname
+                date_fmt  = "—"
+                sort_key  = "0"
+
+            fichiers.append({
+                "filename": fname,
+                "url": f"{FTP_BASE_URL.rstrip('/')}/{fname}",
+                "theme": theme_raw,
+                "date": date_fmt,
+                "sort_key": sort_key,
+            })
+
+        fichiers.sort(key=lambda x: x["sort_key"], reverse=True)
+        for f in fichiers:
+            del f["sort_key"]
+        return fichiers
+
+    except Exception as e:
+        log.error("[FTP] ❌ Erreur liste : %s", e)
+        return []
+
+
+async def save_to_ftp(theme: str, html_content: str):
+    """Wrapper async — exécute l'upload FTP dans un thread."""
     now         = datetime.datetime.now(datetime.timezone.utc)
     ts          = now.strftime("%Y%m%d_%H%M%S")
-    theme_clean = theme or "Aléatoire"
+    theme_clean = theme or "Aleatoire"
     slug        = re.sub(r"[^a-zA-Z0-9]", "_", theme_clean)[:30]
     nom_fichier = f"sujet_{slug}_{ts}.html"
     html_bytes  = html_content.encode("utf-8")
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-
-        # ── 1. Upload du fichier HTML ─────────────────────────────────────────
-        file_url = await upload_html_file(nom_fichier, html_bytes, client)
-
-        # ── 2. Construction des propriétés de la page ─────────────────────────
-        # ⚠️  Ces noms doivent correspondre EXACTEMENT aux colonnes de ta base Notion
-        properties = {
-            "Nom du fichier": {
-                "title": [{"text": {"content": nom_fichier}}]
-            },
-            "Thème": {
-                "rich_text": [{"text": {"content": theme_clean}}]
-            },
-            "Date de génération": {
-                "date": {"start": now.isoformat()}
-            },
-            "IP anonymisée": {
-                "rich_text": [{"text": {"content": ip[:8] + "***"}}]
-            },
-        }
-
-        # ── 3. Blocs de la page ───────────────────────────────────────────────
-        children = [
-            {
-                "object": "block",
-                "type": "heading_2",
-                "heading_2": {
-                    "rich_text": [{"type": "text", "text": {
-                        "content": f"📄 {nom_fichier}"
-                    }}]
-                }
-            },
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {
-                        "content": (
-                            f"Thème : {theme_clean} | "
-                            f"Généré le {now.strftime('%d/%m/%Y à %H:%M')} UTC"
-                        )
-                    }}]
-                }
-            },
-            {"object": "block", "type": "divider", "divider": {}},
-        ]
-
-        # Bloc fichier si l'upload a réussi, sinon un lien de téléchargement data-URI
-        if file_url and not file_url.startswith("notion://"):
-            children.append({
-                "object": "block",
-                "type": "file",
-                "file": {
-                    "type": "external",
-                    "external": {"url": file_url},
-                    "name": nom_fichier,
-                }
-            })
-            log.info("[Notion] Bloc fichier externe ajouté : %s", file_url)
-        else:
-            # Fallback : stocker le HTML en blocs code (max 2000 chars chacun)
-            log.info("[Notion] Fallback — stockage HTML en blocs code.")
-            CHUNK = 2000
-            for chunk in [html_content[i:i+CHUNK] for i in range(0, len(html_content), CHUNK)][:80]:
-                children.append({
-                    "object": "block",
-                    "type": "code",
-                    "code": {
-                        "rich_text": [{"type": "text", "text": {"content": chunk}}],
-                        "language": "html",
-                    }
-                })
-
-        # ── 4. Création de la page ────────────────────────────────────────────
-        resp = await client.post(
-            "https://api.notion.com/v1/pages",
-            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
-            json={
-                "parent": {"database_id": NOTION_DATABASE_ID},
-                "properties": properties,
-                "children": children,
-            },
-            timeout=20.0,
-        )
-
-        if resp.status_code in (200, 201):
-            page_url = resp.json().get("url", "N/A")
-            log.info("[Notion] ✅ Page créée : %s", page_url)
-        else:
-            log.error("[Notion] ❌ Erreur %s : %s", resp.status_code, resp.text[:500])
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, ftp_upload, nom_fichier, html_bytes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -776,49 +707,42 @@ def health():
     return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège Jacques Prévert"}
 
 
-@app.get("/test-notion")
-async def test_notion():
-    """
-    Diagnostic Notion — ouvre cette URL dans le navigateur pour voir ce qui cloche.
-    Ex : https://generateur-sujets-techno-production.up.railway.app/test-notion
-    """
+@app.get("/sujets")
+async def liste_sujets():
+    """Retourne la liste JSON des sujets disponibles sur le FTP."""
+    loop = asyncio.get_event_loop()
+    fichiers = await loop.run_in_executor(None, ftp_list_files)
+    return JSONResponse({"sujets": fichiers, "total": len(fichiers)})
+
+
+@app.get("/test-ftp")
+async def test_ftp():
+    """Diagnostic FTP — ouvre cette URL dans le navigateur."""
     rapport = {
-        "NOTION_API_KEY_present": bool(NOTION_API_KEY),
-        "NOTION_DATABASE_ID_present": bool(NOTION_DATABASE_ID),
-        "NOTION_API_KEY_debut": NOTION_API_KEY[:8] + "..." if NOTION_API_KEY else "—",
-        "NOTION_DATABASE_ID": NOTION_DATABASE_ID or "—",
+        "FTP_HOST":     FTP_HOST or "—",
+        "FTP_USER":     FTP_USER[:4] + "..." if FTP_USER else "—",
+        "FTP_PATH":     FTP_PATH,
+        "FTP_BASE_URL": FTP_BASE_URL,
+        "FTP_PASSWORD_present": bool(FTP_PASSWORD),
     }
-
-    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-        rapport["erreur"] = "Variables d'environnement manquantes sur Railway."
+    if not FTP_HOST or not FTP_USER or not FTP_PASSWORD:
+        rapport["erreur"] = "Variables FTP manquantes sur Railway."
         return JSONResponse(rapport, status_code=500)
-
-    # Test 1 : accès à la base de données
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r_db = await client.get(
-            f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}",
-            headers=NOTION_HEADERS(),
-        )
-    rapport["test_database_status"] = r_db.status_code
-    if r_db.status_code == 200:
-        db_data = r_db.json()
-        rapport["database_title"] = db_data.get("title", [{}])[0].get("plain_text", "?")
-        rapport["database_properties"] = list(db_data.get("properties", {}).keys())
-    else:
-        rapport["test_database_erreur"] = r_db.text[:400]
-
-    # Test 2 : endpoint file upload disponible ?
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r_file = await client.post(
-            "https://api.notion.com/v1/files",
-            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
-            json={"name": "test.html", "content_type": "text/html"},
-        )
-    rapport["test_file_upload_status"] = r_file.status_code
-    rapport["test_file_upload_reponse"] = r_file.json() if r_file.headers.get("content-type", "").startswith("application/json") else r_file.text[:300]
-
+    try:
+        with ftplib.FTP(FTP_HOST, timeout=10) as ftp:
+            ftp.login(FTP_USER, FTP_PASSWORD)
+            rapport["connexion"] = "✅ OK"
+            rapport["repertoire_racine"] = ftp.pwd()
+            try:
+                ftp.cwd(FTP_PATH)
+                lines = []
+                ftp.retrlines("LIST", lines.append)
+                rapport["dossier_sujets"] = f"✅ Existe — {len([l for l in lines if '.html' in l])} fichier(s) HTML"
+            except ftplib.error_perm as e:
+                rapport["dossier_sujets"] = f"⚠️ Pas encore créé ({e}) — sera créé automatiquement au premier upload"
+    except Exception as e:
+        rapport["connexion"] = f"❌ Échec : {e}"
     return JSONResponse(rapport)
-
 
 
 @app.post("/generer")
@@ -829,7 +753,6 @@ async def generer_sujet_post(request: Request, background_tasks: BackgroundTasks
     usage[today][client_ip] += 1
     if usage[today][client_ip] > 15:
         raise HTTPException(429, "Limite atteinte : 15 sujets par jour. Reviens demain !")
-
     try:
         body = await request.json()
         theme = str(body.get("theme", "")).strip()[:80]
@@ -837,10 +760,10 @@ async def generer_sujet_post(request: Request, background_tasks: BackgroundTasks
         theme = ""
 
     contenu_html = await call_groq(theme)
-    page_html = assemble_html(contenu_html, theme)
+    page_html    = assemble_html(contenu_html, theme)
 
-    # Sauvegarde Notion en arrière-plan (n'impacte pas la réponse à l'élève)
-    background_tasks.add_task(save_to_notion, theme or "Aléatoire", client_ip, page_html)
+    # Upload FTP en arrière-plan — n'impacte pas la réponse à l'utilisateur
+    background_tasks.add_task(save_to_ftp, theme or "Aleatoire", page_html)
 
     return HTMLResponse(content=page_html, status_code=200)
 
@@ -855,8 +778,8 @@ async def generer_sujet_get(request: Request, background_tasks: BackgroundTasks,
         raise HTTPException(429, "Limite atteinte.")
 
     contenu_html = await call_groq(theme)
-    page_html = assemble_html(contenu_html, theme)
+    page_html    = assemble_html(contenu_html, theme)
 
-    background_tasks.add_task(save_to_notion, theme or "Aléatoire", client_ip, page_html)
+    background_tasks.add_task(save_to_ftp, theme or "Aleatoire", page_html)
 
     return HTMLResponse(content=page_html, status_code=200)
