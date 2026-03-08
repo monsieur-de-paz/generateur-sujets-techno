@@ -43,6 +43,46 @@ FTP_PASSWORD = os.environ.get("FTP_PASSWORD", "")   # ton mot de passe FTP
 FTP_PATH     = os.environ.get("FTP_PATH", "/generateur/sujets")  # dossier sur le serveur
 FTP_BASE_URL = os.environ.get("FTP_BASE_URL", "https://www.sandrodepaz.fr/generateur/sujets")  # URL publique
 
+# ── Thèmes disponibles ───────────────────────────────────────────────────────
+import random
+
+THEMES = [
+    "Robot aspirateur autonome",
+    "Vélo électrique",
+    "Serrure connectée",
+    "Lampadaire solaire intelligent",
+    "Serre automatisée",
+    "Trottinette électrique",
+    "Purificateur d'air connecté",
+    "Porte automatique",
+    "Fontaine connectée",
+    "Station météo connectée",
+    "Barrière de parking automatique",
+    "Ascenseur intelligent",
+    "Drone agricole",
+    "Bras robotisé pédagogique",
+    "Serre agricole connectée",
+    "Casier intelligent de collège",
+    "Système de recharge sans fil",
+    "Banc public solaire connecté",
+    "Détecteur de place de parking",
+    "Piste cyclable chauffante",
+    "Distributeur automatique de masques",
+    "Tableau blanc interactif",
+    "Borne de recharge pour vélos électriques",
+    "Système d'éclairage adaptatif de salle de classe",
+    "Capteur de qualité de l'eau connecté",
+    "Sac à dos connecté pour collégien",
+    "Arroseur automatique solaire",
+    "Passerelle piétonne intelligente",
+    "Distributeur automatique de graines pour oiseaux",
+    "Système anti-intrusion connecté",
+    "Minuterie intelligente de douche",
+    "Composteur automatique connecté",
+    "Feu de signalisation adaptatif",
+    "Casque de vélo connecté",
+]
+
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 usage: dict = defaultdict(lambda: defaultdict(int))
 
@@ -759,11 +799,14 @@ async def generer_sujet_post(request: Request, background_tasks: BackgroundTasks
     except Exception:
         theme = ""
 
+    # Si pas de thème fourni, on en tire un aléatoirement dans la liste
+    if not theme:
+        theme = random.choice(THEMES)
+
     contenu_html = await call_groq(theme)
     page_html    = assemble_html(contenu_html, theme)
 
-    # Upload FTP en arrière-plan — n'impacte pas la réponse à l'utilisateur
-    background_tasks.add_task(save_to_ftp, theme or "Aleatoire", page_html)
+    background_tasks.add_task(save_to_ftp, theme, page_html)
 
     return HTMLResponse(content=page_html, status_code=200)
 
@@ -777,9 +820,12 @@ async def generer_sujet_get(request: Request, background_tasks: BackgroundTasks,
     if usage[today][client_ip] > 10:
         raise HTTPException(429, "Limite atteinte.")
 
+    if not theme:
+        theme = random.choice(THEMES)
+
     contenu_html = await call_groq(theme)
     page_html    = assemble_html(contenu_html, theme)
 
-    background_tasks.add_task(save_to_ftp, theme or "Aleatoire", page_html)
+    background_tasks.add_task(save_to_ftp, theme, page_html)
 
     return HTMLResponse(content=page_html, status_code=200)
