@@ -5,12 +5,21 @@
 =============================================================
 """
 
-import os, ftplib, io, datetime, re, asyncio
+import os, io, datetime, re, asyncio, logging
 from collections import defaultdict
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
+
+# ── Logging propre (visible dans tous les environnements) ─────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,
+)
+log = logging.getLogger("generateur")
 
 app = FastAPI(title="Générateur de Sujets – Technologie")
 
@@ -584,33 +593,179 @@ def assemble_html(contenu: str, theme: str = "") -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SAUVEGARDE NOTION
+#  SAUVEGARDE NOTION — upload du fichier HTML + page de base de données
 # ─────────────────────────────────────────────────────────────────────────────
-async def save_to_notion(theme: str, ip: str):
+
+NOTION_HEADERS = lambda: {
+    "Authorization": f"Bearer {NOTION_API_KEY}",
+    "Notion-Version": "2022-06-28",
+}
+
+
+async def upload_html_file(filename: str, html_bytes: bytes, client: httpx.AsyncClient) -> str | None:
+    """
+    Tente d'uploader le fichier HTML via l'API Notion File Upload.
+    Retourne l'URL publique du fichier si succès, None sinon.
+
+    L'API Notion File Upload fonctionne en 2 étapes :
+      1. POST /v1/files  →  obtenir un upload_url signé
+      2. PUT upload_url  →  envoyer le fichier binaire
+    """
+    try:
+        # ── Étape 1 : demander une URL d'upload signée ────────────────────────
+        r1 = await client.post(
+            "https://api.notion.com/v1/files",
+            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
+            json={
+                "name": filename,
+                "content_type": "text/html",
+            },
+            timeout=15.0,
+        )
+        log.info("[Notion Upload] Étape 1 — status %s", r1.status_code)
+
+        if r1.status_code not in (200, 201):
+            log.warning("[Notion Upload] Étape 1 échouée : %s", r1.text[:300])
+            return None
+
+        data1 = r1.json()
+        upload_url  = data1.get("upload_url")
+        file_id     = data1.get("id")
+
+        if not upload_url or not file_id:
+            log.warning("[Notion Upload] Réponse étape 1 inattendue : %s", data1)
+            return None
+
+        # ── Étape 2 : envoyer le fichier ──────────────────────────────────────
+        r2 = await client.put(
+            upload_url,
+            content=html_bytes,
+            headers={"Content-Type": "text/html"},
+            timeout=30.0,
+        )
+        log.info("[Notion Upload] Étape 2 — status %s", r2.status_code)
+
+        if r2.status_code not in (200, 201, 204):
+            log.warning("[Notion Upload] Étape 2 échouée : %s", r2.text[:300])
+            return None
+
+        # L'URL publique est soit dans la réponse étape 2, soit dans étape 1
+        file_url = r2.json().get("url") or data1.get("url") or f"notion://file/{file_id}"
+        log.info("[Notion Upload] ✅ Fichier uploadé → %s", file_url)
+        return file_url
+
+    except Exception as e:
+        log.error("[Notion Upload] Exception : %s", e)
+        return None
+
+
+async def save_to_notion(theme: str, ip: str, html_content: str):
+    """
+    1. Upload le fichier HTML dans Notion
+    2. Crée une page dans la base de données avec le fichier attaché
+    """
     if not NOTION_API_KEY or not NOTION_DATABASE_ID:
+        log.warning("[Notion] Variables manquantes — sauvegarde ignorée.")
         return
-    now = datetime.datetime.now(datetime.timezone.utc)
-    ts  = now.strftime("%Y%m%d_%H%M%S")
-    filename = f"brevet_blanc_{re.sub(r'[^a-zA-Z0-9]', '_', theme)[:30]}_{ts}"
-    properties = {
-        "Nom du fichier": {"title": [{"text": {"content": filename}}]},
-        "Thème": {"rich_text": [{"text": {"content": theme or "Aléatoire"}}]},
-        "Date de génération": {"date": {"start": now.isoformat()}},
-        "IP anonymisée": {"rich_text": [{"text": {"content": ip[:8] + "***"}}]},
-        "URL FTP": {"url": None},
-    }
-    async with httpx.AsyncClient(timeout=15.0) as client:
+
+    now         = datetime.datetime.now(datetime.timezone.utc)
+    ts          = now.strftime("%Y%m%d_%H%M%S")
+    theme_clean = theme or "Aléatoire"
+    slug        = re.sub(r"[^a-zA-Z0-9]", "_", theme_clean)[:30]
+    nom_fichier = f"sujet_{slug}_{ts}.html"
+    html_bytes  = html_content.encode("utf-8")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+
+        # ── 1. Upload du fichier HTML ─────────────────────────────────────────
+        file_url = await upload_html_file(nom_fichier, html_bytes, client)
+
+        # ── 2. Construction des propriétés de la page ─────────────────────────
+        # ⚠️  Ces noms doivent correspondre EXACTEMENT aux colonnes de ta base Notion
+        properties = {
+            "Nom du fichier": {
+                "title": [{"text": {"content": nom_fichier}}]
+            },
+            "Thème": {
+                "rich_text": [{"text": {"content": theme_clean}}]
+            },
+            "Date de génération": {
+                "date": {"start": now.isoformat()}
+            },
+            "IP anonymisée": {
+                "rich_text": [{"text": {"content": ip[:8] + "***"}}]
+            },
+        }
+
+        # ── 3. Blocs de la page ───────────────────────────────────────────────
+        children = [
+            {
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {
+                        "content": f"📄 {nom_fichier}"
+                    }}]
+                }
+            },
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {
+                        "content": (
+                            f"Thème : {theme_clean} | "
+                            f"Généré le {now.strftime('%d/%m/%Y à %H:%M')} UTC"
+                        )
+                    }}]
+                }
+            },
+            {"object": "block", "type": "divider", "divider": {}},
+        ]
+
+        # Bloc fichier si l'upload a réussi, sinon un lien de téléchargement data-URI
+        if file_url and not file_url.startswith("notion://"):
+            children.append({
+                "object": "block",
+                "type": "file",
+                "file": {
+                    "type": "external",
+                    "external": {"url": file_url},
+                    "name": nom_fichier,
+                }
+            })
+            log.info("[Notion] Bloc fichier externe ajouté : %s", file_url)
+        else:
+            # Fallback : stocker le HTML en blocs code (max 2000 chars chacun)
+            log.info("[Notion] Fallback — stockage HTML en blocs code.")
+            CHUNK = 2000
+            for chunk in [html_content[i:i+CHUNK] for i in range(0, len(html_content), CHUNK)][:80]:
+                children.append({
+                    "object": "block",
+                    "type": "code",
+                    "code": {
+                        "rich_text": [{"type": "text", "text": {"content": chunk}}],
+                        "language": "html",
+                    }
+                })
+
+        # ── 4. Création de la page ────────────────────────────────────────────
         resp = await client.post(
             "https://api.notion.com/v1/pages",
-            headers={
-                "Authorization": f"Bearer {NOTION_API_KEY}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
+            json={
+                "parent": {"database_id": NOTION_DATABASE_ID},
+                "properties": properties,
+                "children": children,
             },
-            json={"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
+            timeout=20.0,
         )
-    if resp.status_code not in (200, 201):
-        print(f"[Notion] Erreur {resp.status_code}: {resp.text[:300]}")
+
+        if resp.status_code in (200, 201):
+            page_url = resp.json().get("url", "N/A")
+            log.info("[Notion] ✅ Page créée : %s", page_url)
+        else:
+            log.error("[Notion] ❌ Erreur %s : %s", resp.status_code, resp.text[:500])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -618,37 +773,90 @@ async def save_to_notion(theme: str, ip: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 def health():
-    return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège"}
+    return {"status": "ok", "service": "Générateur Sujets Techno – HTML", "college": "Collège Jacques Prévert"}
+
+
+@app.get("/test-notion")
+async def test_notion():
+    """
+    Diagnostic Notion — ouvre cette URL dans le navigateur pour voir ce qui cloche.
+    Ex : https://generateur-sujets-techno-production.up.railway.app/test-notion
+    """
+    rapport = {
+        "NOTION_API_KEY_present": bool(NOTION_API_KEY),
+        "NOTION_DATABASE_ID_present": bool(NOTION_DATABASE_ID),
+        "NOTION_API_KEY_debut": NOTION_API_KEY[:8] + "..." if NOTION_API_KEY else "—",
+        "NOTION_DATABASE_ID": NOTION_DATABASE_ID or "—",
+    }
+
+    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
+        rapport["erreur"] = "Variables d'environnement manquantes sur Railway."
+        return JSONResponse(rapport, status_code=500)
+
+    # Test 1 : accès à la base de données
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r_db = await client.get(
+            f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}",
+            headers=NOTION_HEADERS(),
+        )
+    rapport["test_database_status"] = r_db.status_code
+    if r_db.status_code == 200:
+        db_data = r_db.json()
+        rapport["database_title"] = db_data.get("title", [{}])[0].get("plain_text", "?")
+        rapport["database_properties"] = list(db_data.get("properties", {}).keys())
+    else:
+        rapport["test_database_erreur"] = r_db.text[:400]
+
+    # Test 2 : endpoint file upload disponible ?
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r_file = await client.post(
+            "https://api.notion.com/v1/files",
+            headers={**NOTION_HEADERS(), "Content-Type": "application/json"},
+            json={"name": "test.html", "content_type": "text/html"},
+        )
+    rapport["test_file_upload_status"] = r_file.status_code
+    rapport["test_file_upload_reponse"] = r_file.json() if r_file.headers.get("content-type", "").startswith("application/json") else r_file.text[:300]
+
+    return JSONResponse(rapport)
+
 
 
 @app.post("/generer")
-async def generer_sujet_post(request: Request):
+async def generer_sujet_post(request: Request, background_tasks: BackgroundTasks):
     """POST /generer — Body JSON optionnel : { "theme": "Robot aspirateur" }"""
     client_ip = request.client.host
     today = datetime.date.today().isoformat()
     usage[today][client_ip] += 1
     if usage[today][client_ip] > 15:
         raise HTTPException(429, "Limite atteinte : 15 sujets par jour. Reviens demain !")
+
     try:
         body = await request.json()
         theme = str(body.get("theme", "")).strip()[:80]
     except Exception:
         theme = ""
+
     contenu_html = await call_groq(theme)
     page_html = assemble_html(contenu_html, theme)
-    asyncio.create_task(save_to_notion(theme or "Aléatoire", client_ip))
+
+    # Sauvegarde Notion en arrière-plan (n'impacte pas la réponse à l'élève)
+    background_tasks.add_task(save_to_notion, theme or "Aléatoire", client_ip, page_html)
+
     return HTMLResponse(content=page_html, status_code=200)
 
 
 @app.get("/generer")
-async def generer_sujet_get(request: Request, theme: str = ""):
+async def generer_sujet_get(request: Request, background_tasks: BackgroundTasks, theme: str = ""):
     """GET /generer?theme=Vélo+électrique — pour test direct depuis le navigateur"""
     client_ip = request.client.host
     today = datetime.date.today().isoformat()
     usage[today][client_ip] += 1
     if usage[today][client_ip] > 10:
         raise HTTPException(429, "Limite atteinte.")
+
     contenu_html = await call_groq(theme)
     page_html = assemble_html(contenu_html, theme)
-    asyncio.create_task(save_to_notion(theme or "Aléatoire", client_ip))
+
+    background_tasks.add_task(save_to_notion, theme or "Aléatoire", client_ip, page_html)
+
     return HTMLResponse(content=page_html, status_code=200)
