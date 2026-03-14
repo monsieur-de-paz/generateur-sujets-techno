@@ -544,12 +544,12 @@ SYSTEM_PROMPT = (
     "STRUCTURE HTML A SUIVRE - PAS DE DEVIATION\n"
     "==============================\n\n"
     "<div class=\"print-bar\">\n"
-    "  <span>College Jacques Prevert - M. de PAZ - Brevet Blanc Technologie</span>\n"
+    "  <span>Sujet genere par IA — Propulse par LLaMA 3.3 70B via TechnoGen</span>\n"
     "  <button class=\"btn-print\" onclick=\"imprimerSujet()\">Imprimer / Enregistrer PDF</button>\n"
     "</div>\n\n"
     "<div class=\"sujet\">\n\n"
     "  <div class=\"entete\">\n"
-    "    <p class=\"entete-college\">College Jacques Prevert - Saint-Genis-Pouilly</p>\n"
+    "    <p class=\"entete-college\">Brevet Blanc - Epreuve de Technologie</p>\n"
     "    <hr class=\"entete-hr\">\n"
     "    <p class=\"entete-matiere\">Technologie - Classe de 3<sup>eme</sup></p>\n"
     "    <h1 class=\"entete-titre\">Brevet Blanc - Epreuve de Technologie</h1>\n"
@@ -850,7 +850,7 @@ def assemble_html(theme: str, content: str) -> str:
         '  <link href="https://fonts.googleapis.com/css2?family=Fraunces:'
         'ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;'
         '0,9..144,900;1,9..144,300;1,9..144,400&display=swap" rel="stylesheet">\n'
-        f'  <title>Brevet Blanc - {theme} - College Jacques Prevert</title>\n'
+        f'  <title>Brevet Blanc - {theme} - TechnoGen</title>\n'
         f'  <style>{BASE_CSS}</style>\n'
         '  <script>function imprimerSujet(){ window.print(); }</script>\n'
         '</head>\n<body>\n'
@@ -944,7 +944,7 @@ def health():
     return {
         "status": "ok",
         "service": "TechnoGen v2.0",
-        "college": "College Jacques Prevert",
+        "engine": "LLaMA 3.3 70B via TechnoGen",
     }
 
 
