@@ -920,8 +920,11 @@ def ftp_list_files() -> list:
                     "url": f"{FTP_BASE_URL.rstrip('/')}/{fname}",
                     "theme": theme_raw,
                     "date": date_display,
+                    "_sort": date_str + time_str,
                 })
-        sujets.sort(key=lambda s: s["filename"], reverse=True)
+        sujets.sort(key=lambda s: s.get("_sort", "0"), reverse=True)
+        for s in sujets:
+            s.pop("_sort", None)
         return sujets
     except Exception as e:
         logger.error(f"FTP list failed: {e}")
